@@ -1,0 +1,14 @@
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+.idea/
+.vscode/
+.kotlin/
+*.iml
+build/
+node_modules/
+.expo/
+flutter-run.log
+git-askpass.cmd
