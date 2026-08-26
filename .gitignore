@@ -11,4 +11,7 @@ build/
 node_modules/
 .expo/
 flutter-run.log
+*.log
+emulator-*.png
+sideload-package/
 git-askpass.cmd
