@@ -1,0 +1,5 @@
+# Copy to android/key.properties locally. Never commit the real file or keystore.
+storePassword=replace-with-a-private-password
+keyPassword=replace-with-a-private-password
+keyAlias=my-expensia
+storeFile=my-expensia-release.jks

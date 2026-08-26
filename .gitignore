@@ -15,3 +15,6 @@ flutter-run.log
 emulator-*.png
 sideload-package/
 git-askpass.cmd
+android/key.properties
+android/*.jks
+android/*.keystore
