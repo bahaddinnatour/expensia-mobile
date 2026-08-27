@@ -906,6 +906,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     onPressed: () => Navigator.pop(ctx),
                     child: const Text('Close'))
               ]));
+  Future<void> openDashboard() => Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+          builder: (_) => DashboardPage(
+              portfolios: portfolios, globalCaps: globalCategoryCaps)));
   Future<void> settings() async {
     Future<void> applySettings(_SettingsData data) async {
       setState(() {
@@ -1082,6 +1087,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 : 'My Expensia - $profileName'),
             actions: [
               IconButton(
+                  tooltip: 'Dashboard',
+                  onPressed: openDashboard,
+                  icon: const Icon(Icons.dashboard_outlined)),
+              IconButton(
                   tooltip: signedIn ? 'Cloud account connected' : 'Cloud login',
                   onPressed: connectCloud,
                   icon: Icon(signedIn ? Icons.cloud_done : Icons.cloud_outlined,
@@ -1215,6 +1224,146 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                         style: TextStyle(
                             color: t.inflow ? Colors.teal : Colors.red,
                             fontWeight: FontWeight.bold))));
+          })
+        ]));
+  }
+}
+
+class DashboardPage extends StatelessWidget {
+  const DashboardPage(
+      {super.key, required this.portfolios, required this.globalCaps});
+  final List<Portfolio> portfolios;
+  final Map<String, Map<String, double>> globalCaps;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final currencies = Currency.values.where((currency) =>
+        portfolios.any((portfolio) => portfolio.currency == currency));
+    return Scaffold(
+        appBar: AppBar(title: const Text('Dashboard')),
+        body: ListView(padding: const EdgeInsets.all(20), children: [
+          const Text('This month across all portfolios.',
+              style: TextStyle(color: Colors.blueGrey)),
+          const SizedBox(height: 12),
+          ...currencies.map((currency) {
+            final matching = portfolios
+                .where((portfolio) => portfolio.currency == currency)
+                .toList();
+            final transactions = matching
+                .expand((portfolio) => portfolio.transactions)
+                .where((transaction) =>
+                    transaction.createdAt.year == now.year &&
+                    transaction.createdAt.month == now.month)
+                .toList();
+            final inflow = transactions
+                .where((transaction) => transaction.inflow)
+                .fold(0.0, (sum, transaction) => sum + transaction.amount);
+            final outflow = transactions
+                .where((transaction) => !transaction.inflow)
+                .fold(0.0, (sum, transaction) => sum + transaction.amount);
+            final netWorth =
+                matching.fold(0.0, (sum, portfolio) => sum + portfolio.balance);
+            final caps = globalCaps[currency.name] ?? {};
+            final alerts = caps.entries
+                .map((entry) {
+                  final spent = transactions
+                      .where((transaction) =>
+                          !transaction.inflow &&
+                          transaction.category == entry.key)
+                      .fold(
+                          0.0, (sum, transaction) => sum + transaction.amount);
+                  return (category: entry.key, cap: entry.value, spent: spent);
+                })
+                .where(
+                    (alert) => alert.cap > 0 && alert.spent / alert.cap >= .9)
+                .toList()
+              ..sort((a, b) => (b.spent / b.cap).compareTo(a.spent / a.cap));
+            Widget metric(String label, double value, {Color? color}) =>
+                Expanded(
+                    child: Card(
+                        margin: EdgeInsets.zero,
+                        color: const Color(0xfff3f7f4),
+                        child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(label,
+                                      style: const TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold)),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                      '${currency.symbol} ${value.toStringAsFixed(2)}',
+                                      style: TextStyle(
+                                          color: color,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold))
+                                ]))));
+            return Card(
+                margin: const EdgeInsets.only(bottom: 16),
+                child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(children: [
+                            Expanded(
+                                child: Text(
+                                    '${currency.name.toUpperCase()} overview',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleLarge)),
+                            Text('${matching.length} portfolios',
+                                style: const TextStyle(color: Colors.blueGrey))
+                          ]),
+                          const SizedBox(height: 12),
+                          Row(children: [
+                            metric('MONTHLY INFLOW', inflow,
+                                color: Colors.teal),
+                            const SizedBox(width: 8),
+                            metric('MONTHLY OUTFLOW', outflow,
+                                color: Colors.red)
+                          ]),
+                          const SizedBox(height: 8),
+                          Row(children: [
+                            metric('NET CASHFLOW', inflow - outflow,
+                                color: inflow >= outflow
+                                    ? Colors.teal
+                                    : Colors.red),
+                            const SizedBox(width: 8),
+                            metric('NET WORTH', netWorth)
+                          ]),
+                          const SizedBox(height: 16),
+                          Text('Budget alerts',
+                              style: Theme.of(context).textTheme.titleSmall),
+                          const SizedBox(height: 6),
+                          if (alerts.isEmpty)
+                            const Text(
+                                'No category is at 90% of its monthly cap.',
+                                style: TextStyle(color: Colors.blueGrey)),
+                          ...alerts.map((alert) => Container(
+                              width: double.infinity,
+                              margin: const EdgeInsets.only(top: 7),
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                  color: const Color(0xfffff4f2),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: const Border(
+                                      left: BorderSide(
+                                          color: Colors.red, width: 3))),
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                        '${alert.category} - ${(alert.spent / alert.cap * 100).toStringAsFixed(0)}% used',
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.bold)),
+                                    Text(
+                                        '${currency.symbol} ${alert.spent.toStringAsFixed(2)} of ${currency.symbol} ${alert.cap.toStringAsFixed(2)} monthly cap')
+                                  ])))
+                        ])));
           })
         ]));
   }
