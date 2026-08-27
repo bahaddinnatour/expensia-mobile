@@ -303,6 +303,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   final _reminders = PlanReminderService();
   final _cloud = Supabase.instance.client;
   var portfolios = <Portfolio>[];
+  var globalCategoryCaps = <String, Map<String, double>>{};
   var monthlyPlans = <MonthlyPlan>[];
   var selected = '';
   var profileName = '';
@@ -483,6 +484,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   orElse: () => Currency.sar))
         ];
       }
+      globalCategoryCaps = (d['globalCategoryCaps'] as Map? ?? {}).map(
+          (currency, caps) => MapEntry(
+              currency.toString(),
+              (caps as Map).map((category, amount) =>
+                  MapEntry(category.toString(), (amount as num).toDouble()))));
       monthlyPlans = (d['monthlyPlans'] as List? ?? [])
           .map((x) => MonthlyPlan.fromJson(x))
           .toList();
@@ -569,6 +575,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       'biometricEnabled': biometricEnabled,
       'categories': categories,
       'categoryIcons': categoryIcons,
+      'globalCategoryCaps': globalCategoryCaps,
       'categoryVersion': 2,
       'selectedId': selected,
       'portfolios': portfolios.map((p) => p.json()).toList(),
@@ -748,10 +755,16 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
   Future<bool> confirmCapWarning(Tx tx) async {
     if (tx.inflow) return true;
-    final cap = current.categoryCaps[tx.category];
+    final sharedCap = globalCategoryCaps[current.currency.name]?[tx.category];
+    final cap = sharedCap ?? current.categoryCaps[tx.category];
     if (cap == null || cap <= 0) return true;
     final now = tx.createdAt;
-    final spent = current.transactions
+    final spendingPortfolios = sharedCap == null
+        ? [current]
+        : portfolios
+            .where((portfolio) => portfolio.currency == current.currency);
+    final spent = spendingPortfolios
+        .expand((portfolio) => portfolio.transactions)
         .where((item) =>
             !item.inflow &&
             item.category == tx.category &&
@@ -878,6 +891,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     Future<void> applySettings(_SettingsData data) async {
       setState(() {
         portfolios = data.portfolios;
+        globalCategoryCaps = data.globalCategoryCaps;
         selected = data.selected;
         profileName = data.name;
         email = data.email;
@@ -901,6 +915,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     categories: categories,
                     categoryIcons: categoryIcons,
                     monthlyPlans: monthlyPlans,
+                    globalCategoryCaps: globalCategoryCaps,
                     biometricEnabled: biometricEnabled),
                 cloudSignedIn: _cloud.auth.currentUser != null,
                 onCloudAccount: connectCloud,
@@ -1399,12 +1414,14 @@ class _SettingsData {
       required this.categories,
       required this.categoryIcons,
       required this.monthlyPlans,
+      required this.globalCategoryCaps,
       required this.biometricEnabled});
   final List<Portfolio> portfolios;
   final String selected, name, email;
   final List<String> categories;
   final Map<String, int> categoryIcons;
   final List<MonthlyPlan> monthlyPlans;
+  final Map<String, Map<String, double>> globalCategoryCaps;
   final bool biometricEnabled;
 }
 
@@ -1430,6 +1447,7 @@ class _SettingsState extends State<Settings> {
   late List<String> categories;
   late Map<String, int> categoryIcons;
   late List<MonthlyPlan> monthlyPlans;
+  late Map<String, Map<String, double>> globalCategoryCaps;
   late bool biometricEnabled;
   @override
   void initState() {
@@ -1449,6 +1467,8 @@ class _SettingsState extends State<Settings> {
     categories = [...widget.data.categories];
     categoryIcons = {...widget.data.categoryIcons};
     monthlyPlans = [...widget.data.monthlyPlans];
+    globalCategoryCaps = widget.data.globalCategoryCaps
+        .map((currency, caps) => MapEntry(currency, {...caps}));
     biometricEnabled = widget.data.biometricEnabled;
     name = TextEditingController(text: widget.data.name);
     email = TextEditingController(text: widget.data.email);
@@ -1672,6 +1692,7 @@ class _SettingsState extends State<Settings> {
         categories: categories,
         categoryIcons: categoryIcons,
         monthlyPlans: monthlyPlans,
+        globalCategoryCaps: globalCategoryCaps,
         biometricEnabled: biometricEnabled));
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -1725,6 +1746,7 @@ class _SettingsState extends State<Settings> {
         categories: categories,
         categoryIcons: categoryIcons,
         monthlyPlans: monthlyPlans,
+        globalCategoryCaps: globalCategoryCaps,
         biometricEnabled: biometricEnabled));
     await archiveSharedRecords('portfolio', [portfolio.id]);
     await archiveSharedRecords('transaction', transactionIds);
@@ -1847,7 +1869,8 @@ class _SettingsState extends State<Settings> {
                 portfolios: portfolios,
                 initialSelected: selected,
                 categories: categories,
-                icons: categoryIcons)));
+                icons: categoryIcons,
+                globalCaps: globalCategoryCaps)));
     setState(() {});
   }
 
@@ -1861,6 +1884,7 @@ class _SettingsState extends State<Settings> {
           categories: categories,
           categoryIcons: categoryIcons,
           monthlyPlans: monthlyPlans,
+          globalCategoryCaps: globalCategoryCaps,
           biometricEnabled: biometricEnabled));
   @override
   Widget build(BuildContext c) => PopScope(
@@ -2587,17 +2611,20 @@ class MonthlyCapsPage extends StatefulWidget {
       required this.portfolios,
       required this.initialSelected,
       required this.categories,
-      required this.icons});
+      required this.icons,
+      required this.globalCaps});
   final List<Portfolio> portfolios;
   final String initialSelected;
   final List<String> categories;
   final Map<String, int> icons;
+  final Map<String, Map<String, double>> globalCaps;
   @override
   State<MonthlyCapsPage> createState() => _MonthlyCapsPageState();
 }
 
 class _MonthlyCapsPageState extends State<MonthlyCapsPage> {
   late String selected;
+  var shared = false;
   @override
   void initState() {
     super.initState();
@@ -2606,9 +2633,12 @@ class _MonthlyCapsPageState extends State<MonthlyCapsPage> {
 
   Portfolio get portfolio =>
       widget.portfolios.firstWhere((item) => item.id == selected);
+  Map<String, double> get caps => shared
+      ? widget.globalCaps.putIfAbsent(portfolio.currency.name, () => {})
+      : portfolio.categoryCaps;
   Future<void> editCap(String category) async {
-    final amount = TextEditingController(
-        text: portfolio.categoryCaps[category]?.toStringAsFixed(2) ?? '');
+    final amount =
+        TextEditingController(text: caps[category]?.toStringAsFixed(2) ?? '');
     final value = await showDialog<double?>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -2636,9 +2666,9 @@ class _MonthlyCapsPageState extends State<MonthlyCapsPage> {
     if (value != null)
       setState(() {
         if (value <= 0) {
-          portfolio.categoryCaps.remove(category);
+          caps.remove(category);
         } else {
-          portfolio.categoryCaps[category] = value;
+          caps[category] = value;
         }
       });
   }
@@ -2655,15 +2685,29 @@ class _MonthlyCapsPageState extends State<MonthlyCapsPage> {
                     DropdownMenuItem(value: item.id, child: Text(item.name)))
                 .toList(),
             onChanged: (value) => setState(() => selected = value!)),
+        const SizedBox(height: 10),
+        DropdownButtonFormField<bool>(
+            initialValue: shared,
+            decoration: const InputDecoration(labelText: 'Cap mode'),
+            items: [
+              const DropdownMenuItem(
+                  value: false, child: Text('Per portfolio')),
+              DropdownMenuItem(
+                  value: true,
+                  child: Text(
+                      'Shared across ${portfolio.currency.nameLabel} portfolios'))
+            ],
+            onChanged: (value) => setState(() => shared = value!)),
         const SizedBox(height: 20),
         Text('Monthly category caps',
             style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 4),
-        Text(
-            'Caps below apply to ${portfolio.name} and reset on the 1st of every month.'),
+        Text(shared
+            ? 'Caps are shared by all ${portfolio.currency.nameLabel} portfolios and reset on the 1st of every month.'
+            : 'Caps apply only to ${portfolio.name} and reset on the 1st of every month.'),
         const SizedBox(height: 16),
         ...widget.categories.map((category) {
-          final cap = portfolio.categoryCaps[category];
+          final cap = caps[category];
           return Card(
               child: ListTile(
                   onTap: () => editCap(category),
