@@ -627,6 +627,30 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     await _cloud.from('finance_records').upsert(records);
   }
 
+  Future<void> createScheduledBackup(
+      User user, Map<String, dynamic> state) async {
+    final last = DateTime.tryParse(
+        await _secureStorage.read(key: 'my_expensia_last_backup') ?? '');
+    if (last != null && DateTime.now().difference(last).inDays < 7) return;
+    try {
+      final records = await _cloud
+          .from('finance_records')
+          .select('record_type, record_id, payload, updated_at, deleted_at')
+          .eq('user_id', user.id);
+      await _cloud.from('finance_backups').insert({
+        'user_id': user.id,
+        'label': 'Automatic mobile backup ${DateTime.now().toIso8601String()}',
+        'finance_records': records,
+        'flutter_state': state
+      });
+      await _secureStorage.write(
+          key: 'my_expensia_last_backup',
+          value: DateTime.now().toIso8601String());
+    } catch (_) {
+      // Backup availability must not interrupt normal finance syncing.
+    }
+  }
+
   Future<void> save() async {
     final data = {
       'name': profileName,
@@ -663,6 +687,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           'updated_at': DateTime.now().toIso8601String()
         });
         await writeSharedRecords(user);
+        await createScheduledBackup(user, data);
       } catch (_) {}
     }
     await _reminders.schedule(monthlyPlans, portfolios);
