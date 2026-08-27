@@ -459,6 +459,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     }
     var needsStarterPlans = false;
     var needsCategoryUpgrade = false;
+    var needsSharedCapsMigration = false;
     if (raw != null) {
       final d = jsonDecode(raw) as Map<String, dynamic>;
       profileName = d['name'] ?? '';
@@ -491,6 +492,19 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               currency.toString(),
               (caps as Map).map((category, amount) =>
                   MapEntry(category.toString(), (amount as num).toDouble()))));
+      if (d['capsSharedVersion'] != 1) {
+        for (final portfolio in portfolios) {
+          final shared = globalCategoryCaps.putIfAbsent(
+              portfolio.currency.name, () => <String, double>{});
+          for (final entry in portfolio.categoryCaps.entries) {
+            if (entry.value > (shared[entry.key] ?? 0)) {
+              shared[entry.key] = entry.value;
+            }
+          }
+          portfolio.categoryCaps.clear();
+        }
+        needsSharedCapsMigration = true;
+      }
       monthlyPlans = (d['monthlyPlans'] as List? ?? [])
           .map((x) => MonthlyPlan.fromJson(x))
           .toList();
@@ -514,7 +528,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         loading = false;
         locked = biometricEnabled;
       });
-    if (needsStarterPlans || needsCategoryUpgrade) {
+    if (needsStarterPlans || needsCategoryUpgrade || needsSharedCapsMigration) {
       await save();
     } else {
       await _reminders.schedule(monthlyPlans, portfolios);
@@ -578,6 +592,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       'categories': categories,
       'categoryIcons': categoryIcons,
       'globalCategoryCaps': globalCategoryCaps,
+      'capsSharedVersion': 1,
       'categoryVersion': 2,
       'selectedId': selected,
       'portfolios': portfolios.map((p) => p.json()).toList(),
