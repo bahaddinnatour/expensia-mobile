@@ -670,6 +670,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             email: request['email']!, password: request['password']!);
       }
       await syncCloud();
+    } on AuthRetryableFetchException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(
+                'Cannot reach cloud sync. Check the tablet internet or DNS settings.')));
+      }
     } on AuthException catch (error) {
       if (mounted)
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
