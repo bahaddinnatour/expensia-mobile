@@ -1040,7 +1040,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     save();
   }
 
-  Future<void> openPlanTransactions() => Navigator.push<void>(
+  Future<void> openBillCalendar() => Navigator.push<void>(
       context,
       MaterialPageRoute(
           builder: (_) => PlanTransactionsPage(
@@ -1111,8 +1111,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   icon: Icon(signedIn ? Icons.cloud_done : Icons.cloud_outlined,
                       color: signedIn ? Colors.blue.shade700 : null)),
               IconButton(
-                  tooltip: 'Monthly plans',
-                  onPressed: openPlanTransactions,
+                  tooltip: 'Bill calendar',
+                  onPressed: openBillCalendar,
                   icon: const Icon(Icons.calendar_month_outlined)),
               IconButton(onPressed: settings, icon: const Icon(Icons.settings))
             ]),
@@ -2571,13 +2571,13 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
     final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
     final calendarCells = firstDay.weekday % 7 + daysInMonth;
     return Scaffold(
-      appBar: AppBar(title: const Text('Monthly plans')),
+      appBar: AppBar(title: const Text('Bill calendar')),
       body: ordered.isEmpty
           ? const Center(child: Text('No monthly plans yet.'))
           : ListView(
               padding: const EdgeInsets.all(20),
               children: [
-                Text('Create plan transactions',
+                Text('Bill calendar',
                     style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 4),
                 const Text(
