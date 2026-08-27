@@ -133,7 +133,9 @@ class PlanReminderService {
 bool _planCreatedInMonth(
     MonthlyPlan plan, List<Portfolio> portfolios, DateTime date) {
   final month = '${date.year}-${date.month.toString().padLeft(2, '0')}';
-  if (plan.lastCreatedMonth == month) return true;
+  if (plan.lastCreatedMonth == month || plan.lastSkippedMonth == month) {
+    return true;
+  }
   final matches = portfolios.where((item) => item.id == plan.portfolioId);
   if (matches.isEmpty) return false;
   final portfolio = matches.first;
@@ -189,12 +191,13 @@ class MonthlyPlan {
       this.savingsTransfer = false,
       this.destinationPortfolioId,
       this.recurring = true,
-      this.lastCreatedMonth});
+      this.lastCreatedMonth,
+      this.lastSkippedMonth});
   final String id, description, category, portfolioId;
   final double amount;
   final int dueDay;
   final bool savingsTransfer, recurring;
-  final String? destinationPortfolioId, lastCreatedMonth;
+  final String? destinationPortfolioId, lastCreatedMonth, lastSkippedMonth;
   Map<String, dynamic> json() => {
         'id': id,
         'description': description,
@@ -205,7 +208,8 @@ class MonthlyPlan {
         'savingsTransfer': savingsTransfer,
         'destinationPortfolioId': destinationPortfolioId,
         'recurring': recurring,
-        'lastCreatedMonth': lastCreatedMonth
+        'lastCreatedMonth': lastCreatedMonth,
+        'lastSkippedMonth': lastSkippedMonth
       };
   factory MonthlyPlan.fromJson(Map<String, dynamic> x) => MonthlyPlan(
       id: x['id'],
@@ -217,7 +221,8 @@ class MonthlyPlan {
       savingsTransfer: x['savingsTransfer'] ?? false,
       destinationPortfolioId: x['destinationPortfolioId'],
       recurring: x['recurring'] ?? true,
-      lastCreatedMonth: x['lastCreatedMonth']);
+      lastCreatedMonth: x['lastCreatedMonth'],
+      lastSkippedMonth: x['lastSkippedMonth']);
 }
 
 class Portfolio {
@@ -389,7 +394,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           savingsTransfer: plan.savingsTransfer,
           destinationPortfolioId: plan.destinationPortfolioId,
           recurring: plan.recurring,
-          lastCreatedMonth: plan.lastCreatedMonth);
+          lastCreatedMonth: plan.lastCreatedMonth,
+          lastSkippedMonth: plan.lastSkippedMonth);
     }).toList();
   }
 
@@ -920,7 +926,30 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             savingsTransfer: plan.savingsTransfer,
             destinationPortfolioId: plan.destinationPortfolioId,
             recurring: plan.recurring,
-            lastCreatedMonth: month);
+            lastCreatedMonth: month,
+            lastSkippedMonth: null);
+    });
+    save();
+  }
+
+  void skipPlanTransaction(MonthlyPlan plan) {
+    final now = DateTime.now();
+    final month = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+    setState(() {
+      final index = monthlyPlans.indexWhere((item) => item.id == plan.id);
+      if (index < 0) return;
+      monthlyPlans[index] = MonthlyPlan(
+          id: plan.id,
+          description: plan.description,
+          category: plan.category,
+          amount: plan.amount,
+          dueDay: plan.dueDay,
+          portfolioId: plan.portfolioId,
+          savingsTransfer: plan.savingsTransfer,
+          destinationPortfolioId: plan.destinationPortfolioId,
+          recurring: plan.recurring,
+          lastCreatedMonth: null,
+          lastSkippedMonth: month);
     });
     save();
   }
@@ -932,7 +961,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               plans: monthlyPlans,
               portfolios: portfolios,
               icons: categoryIcons,
-              onCreate: createPlanTransaction)));
+              onCreate: createPlanTransaction,
+              onSkip: skipPlanTransaction)));
   @override
   Widget build(BuildContext c) {
     if (loading)
@@ -1958,11 +1988,13 @@ class PlanTransactionsPage extends StatefulWidget {
       required this.plans,
       required this.portfolios,
       required this.icons,
-      required this.onCreate});
+      required this.onCreate,
+      required this.onSkip});
   final List<MonthlyPlan> plans;
   final List<Portfolio> portfolios;
   final Map<String, int> icons;
   final void Function(MonthlyPlan) onCreate;
+  final void Function(MonthlyPlan) onSkip;
   @override
   State<PlanTransactionsPage> createState() => _PlanTransactionsPageState();
 }
@@ -1975,6 +2007,7 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
     final month = '${now.year}-${now.month.toString().padLeft(2, '0')}';
     final source = portfolio(plan.portfolioId);
     return plan.lastCreatedMonth == month ||
+        plan.lastSkippedMonth == month ||
         source.transactions.any((tx) =>
             !tx.inflow &&
             tx.description == plan.description &&
@@ -1988,6 +2021,30 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
     setState(() {});
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text('${plan.description} created.')));
+  }
+
+  Future<void> skip(MonthlyPlan plan) async {
+    final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: Text('Skip ${plan.description}?'),
+                content: const Text(
+                    'No transaction will be created. The plan will be available again next month.'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Skip this month'))
+                ]));
+    if (confirmed != true) return;
+    widget.onSkip(plan);
+    setState(() {});
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${plan.description} skipped this month.')));
+    }
   }
 
   @override
@@ -2014,6 +2071,8 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                       ? null
                       : portfolio(plan.destinationPortfolioId!);
                   final isCreated = createdThisMonth(plan, now);
+                  final isSkipped = plan.lastSkippedMonth ==
+                      '${now.year}-${now.month.toString().padLeft(2, '0')}';
                   return Card(
                       child: Padding(
                     padding: const EdgeInsets.all(14),
@@ -2040,15 +2099,29 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                           const SizedBox(height: 10),
                           Align(
                               alignment: Alignment.centerRight,
-                              child: FilledButton.icon(
-                                onPressed:
-                                    isCreated ? null : () => create(plan),
-                                icon: Icon(
-                                    isCreated ? Icons.check : Icons.play_arrow),
-                                label: Text(isCreated
-                                    ? 'Created this month'
-                                    : 'Create now'),
-                              )),
+                              child: isCreated
+                                  ? FilledButton.icon(
+                                      onPressed: null,
+                                      icon: Icon(isSkipped
+                                          ? Icons.skip_next_outlined
+                                          : Icons.check),
+                                      label: Text(isSkipped
+                                          ? 'Skipped this month'
+                                          : 'Created this month'))
+                                  : Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        OutlinedButton(
+                                            onPressed: () => skip(plan),
+                                            child:
+                                                const Text('Skip this month')),
+                                        const SizedBox(width: 8),
+                                        FilledButton.icon(
+                                            onPressed: () => create(plan),
+                                            icon: const Icon(Icons.play_arrow),
+                                            label: const Text('Create now'))
+                                      ],
+                                    )),
                         ]),
                   ));
                 }),
@@ -2198,7 +2271,9 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
                                           transfer ? destination : null,
                                       recurring: recurring,
                                       lastCreatedMonth:
-                                          existing?.lastCreatedMonth));
+                                          existing?.lastCreatedMonth,
+                                      lastSkippedMonth:
+                                          existing?.lastSkippedMonth));
                           },
                           child: const Text('Save'))
                     ])));
