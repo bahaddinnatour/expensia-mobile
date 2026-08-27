@@ -1436,11 +1436,37 @@ class _SettingsState extends State<Settings> {
                     'Biometric authentication is not available on this device.')));
           return;
         }
+        if ((await auth.getAvailableBiometrics()).isEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text(
+                    'Set up a fingerprint or face biometric in device Settings first.')));
+          }
+          return;
+        }
         final confirmed = await auth.authenticate(
             localizedReason: 'Confirm to enable biometric lock',
             biometricOnly: true,
             persistAcrossBackgrounding: true);
         if (!confirmed) return;
+      } on LocalAuthException catch (error) {
+        final message = switch (error.code) {
+          LocalAuthExceptionCode.noCredentialsSet =>
+            'Set a secure screen lock and biometric in device Settings first.',
+          LocalAuthExceptionCode.noBiometricsEnrolled =>
+            'Set up a fingerprint or face biometric in device Settings first.',
+          LocalAuthExceptionCode.noBiometricHardware =>
+            'This device does not support biometric authentication.',
+          LocalAuthExceptionCode.biometricLockout ||
+          LocalAuthExceptionCode.temporaryLockout =>
+            'Biometrics are temporarily locked. Unlock the device with its PIN, then try again.',
+          _ => error.description ?? 'Unable to enable biometric lock.'
+        };
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(message)));
+        }
+        return;
       } catch (_) {
         if (mounted)
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
