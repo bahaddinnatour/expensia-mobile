@@ -399,6 +399,35 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     }).toList();
   }
 
+  void repairMonthlyPlanReferences() {
+    final portfolioIds = portfolios.map((portfolio) => portfolio.id).toSet();
+    final fallback =
+        portfolioIds.contains(selected) ? selected : portfolios.first.id;
+    monthlyPlans = monthlyPlans.map((plan) {
+      final source =
+          portfolioIds.contains(plan.portfolioId) ? plan.portfolioId : fallback;
+      final destination = portfolioIds.contains(plan.destinationPortfolioId)
+          ? plan.destinationPortfolioId
+          : null;
+      if (source == plan.portfolioId &&
+          destination == plan.destinationPortfolioId) {
+        return plan;
+      }
+      return MonthlyPlan(
+          id: plan.id,
+          description: plan.description,
+          category: plan.category,
+          amount: plan.amount,
+          dueDay: plan.dueDay,
+          portfolioId: source,
+          savingsTransfer: plan.savingsTransfer,
+          destinationPortfolioId: destination,
+          recurring: plan.recurring,
+          lastCreatedMonth: plan.lastCreatedMonth,
+          lastSkippedMonth: plan.lastSkippedMonth);
+    }).toList();
+  }
+
   Future<void> load() async {
     await _reminders.initialize();
     var raw = await _secureStorage.read(key: 'my_expensia_state_v1');
@@ -450,8 +479,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       selected = 'default';
       needsStarterPlans = true;
     }
+    if (!portfolios.any((portfolio) => portfolio.id == selected)) {
+      selected = portfolios.first.id;
+    }
     if (needsStarterPlans) seedMonthlyPlans();
     if (needsCategoryUpgrade) upgradeStarterPlanCategories();
+    repairMonthlyPlanReferences();
     if (mounted)
       setState(() {
         loading = false;
@@ -510,26 +543,6 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         'payload': plan.json()
       });
     }
-    final activeTransactionIds = records
-        .where((record) => record['record_type'] == 'transaction')
-        .map((record) => record['record_id'] as String)
-        .toSet();
-    final storedTransactions = await _cloud
-        .from('finance_records')
-        .select('record_id')
-        .eq('user_id', user.id)
-        .eq('record_type', 'transaction');
-    for (final stored in storedTransactions) {
-      final recordId = stored['record_id'] as String;
-      if (!activeTransactionIds.contains(recordId)) {
-        await _cloud
-            .from('finance_records')
-            .update({'deleted_at': DateTime.now().toIso8601String()})
-            .eq('user_id', user.id)
-            .eq('record_type', 'transaction')
-            .eq('record_id', recordId);
-      }
-    }
     await _cloud.from('finance_records').upsert(records);
   }
 
@@ -549,7 +562,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     };
     await _secureStorage.write(
         key: 'my_expensia_state_v1', value: jsonEncode(data));
-    final user = _cloud.auth.currentUser;
+    final cloud = Supabase.instance.client;
+    final user = cloud.auth.currentUser;
     if (user != null) {
       try {
         await _cloud.from('profiles').upsert({
@@ -881,7 +895,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   }
 
   void createPlanTransaction(MonthlyPlan plan) {
-    final source = portfolios.firstWhere((item) => item.id == plan.portfolioId);
+    final source = portfolios.firstWhere((item) => item.id == plan.portfolioId,
+        orElse: () => portfolios.firstWhere((item) => item.id == selected,
+            orElse: () => portfolios.first));
     final now = DateTime.now();
     final month = '${now.year}-${now.month.toString().padLeft(2, '0')}';
     final transferId = 'transfer_${now.microsecondsSinceEpoch}';
@@ -1561,6 +1577,58 @@ class _SettingsState extends State<Settings> {
     }
   }
 
+  Future<void> deletePortfolio(Portfolio portfolio) async {
+    if (portfolios.length == 1) return;
+    final replacement = portfolios.firstWhere(
+        (item) => item.id != portfolio.id && item.name == 'My portfolio SNB',
+        orElse: () => portfolios.firstWhere((item) => item.id != portfolio.id));
+    final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: Text('Delete ${portfolio.name}?'),
+                content: Text(
+                    'Its transactions and related monthly plans will be removed. ${replacement.name} will become active.'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: Colors.red.shade700),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Delete'))
+                ]));
+    if (confirmed != true) return;
+    final transactionIds = portfolio.transactions.map((tx) => tx.id).toList();
+    final planIds = monthlyPlans
+        .where((plan) =>
+            plan.portfolioId == portfolio.id ||
+            plan.destinationPortfolioId == portfolio.id)
+        .map((plan) => plan.id)
+        .toList();
+    setState(() {
+      portfolios.removeWhere((item) => item.id == portfolio.id);
+      monthlyPlans = monthlyPlans
+          .where((plan) =>
+              plan.portfolioId != portfolio.id &&
+              plan.destinationPortfolioId != portfolio.id)
+          .toList();
+      selected = replacement.id;
+    });
+    await widget.onSave(_SettingsData(
+        portfolios: portfolios,
+        selected: selected,
+        name: name.text.trim(),
+        email: email.text.trim(),
+        categories: categories,
+        categoryIcons: categoryIcons,
+        monthlyPlans: monthlyPlans,
+        biometricEnabled: biometricEnabled));
+    await archiveSharedRecords('portfolio', [portfolio.id]);
+    await archiveSharedRecords('transaction', transactionIds);
+    await archiveSharedRecords('plan', planIds);
+  }
+
   Future<void> addCategory() async {
     final c = TextEditingController();
     var icon = Icons.sell_outlined;
@@ -1628,13 +1696,33 @@ class _SettingsState extends State<Settings> {
         MaterialPageRoute(
             builder: (_) => AllTransactionsPage(
                 portfolios: portfolios,
+                selectedPortfolioId: selected,
                 icons: categoryIcons,
                 plans: monthlyPlans,
-                categories: categories)));
+                categories: categories,
+                onDeleted: archiveTransactions)));
     setState(() {});
   }
 
+  Future<void> archiveTransactions(List<String> transactionIds) async {
+    await archiveSharedRecords('transaction', transactionIds);
+  }
+
+  Future<void> archiveSharedRecords(
+      String recordType, List<String> recordIds) async {
+    final cloud = Supabase.instance.client;
+    final user = cloud.auth.currentUser;
+    if (user == null || recordIds.isEmpty) return;
+    await cloud
+        .from('finance_records')
+        .update({'deleted_at': DateTime.now().toIso8601String()})
+        .eq('user_id', user.id)
+        .eq('record_type', recordType)
+        .inFilter('record_id', recordIds);
+  }
+
   Future<void> openPlans() async {
+    final initialPlanIds = monthlyPlans.map((plan) => plan.id).toSet();
     await Navigator.push<void>(
         context,
         MaterialPageRoute(
@@ -1644,6 +1732,9 @@ class _SettingsState extends State<Settings> {
                 categories: categories,
                 icons: categoryIcons)));
     setState(() {});
+    final remainingPlanIds = monthlyPlans.map((plan) => plan.id).toSet();
+    await archiveSharedRecords(
+        'plan', initialPlanIds.difference(remainingPlanIds).toList());
   }
 
   Future<void> openCaps() async {
@@ -1728,11 +1819,8 @@ class _SettingsState extends State<Settings> {
                       icon: const Icon(Icons.restart_alt_outlined)),
                   if (portfolios.length > 1)
                     IconButton(
-                        onPressed: () => setState(() {
-                              portfolios.remove(p);
-                              if (selected == p.id)
-                                selected = portfolios.first.id;
-                            }),
+                        tooltip: 'Delete portfolio',
+                        onPressed: () => deletePortfolio(p),
                         icon: const Icon(Icons.delete_outline))
                 ]))),
             FilledButton.icon(
@@ -1779,13 +1867,17 @@ class AllTransactionsPage extends StatefulWidget {
   const AllTransactionsPage(
       {super.key,
       required this.portfolios,
+      required this.selectedPortfolioId,
       required this.icons,
       required this.plans,
-      required this.categories});
+      required this.categories,
+      required this.onDeleted});
   final List<Portfolio> portfolios;
+  final String selectedPortfolioId;
   final Map<String, int> icons;
   final List<MonthlyPlan> plans;
   final List<String> categories;
+  final Future<void> Function(List<String>) onDeleted;
   @override
   State<AllTransactionsPage> createState() => _AllTransactionsPageState();
 }
@@ -1794,6 +1886,7 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
   List<(Portfolio, Tx)> get entries {
     final result = <(Portfolio, Tx)>[];
     for (final portfolio in widget.portfolios) {
+      if (portfolio.id != widget.selectedPortfolioId) continue;
       for (final tx in portfolio.transactions) {
         result.add((portfolio, tx));
       }
@@ -1902,6 +1995,22 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
     if (confirmed != true) return;
     final now = DateTime.now();
     final month = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+    final removedIds = <String>{};
+    if (tx.transferId != null) {
+      for (final item in widget.portfolios) {
+        removedIds.addAll(item.transactions
+            .where((entry) => entry.transferId == tx.transferId)
+            .map((entry) => entry.id));
+      }
+    } else {
+      removedIds.add(tx.id);
+      final pairedId = tx.id.endsWith('_out')
+          ? '${tx.id.substring(0, tx.id.length - 4)}_in'
+          : tx.id.endsWith('_in')
+              ? '${tx.id.substring(0, tx.id.length - 3)}_out'
+              : null;
+      if (pairedId != null) removedIds.add(pairedId);
+    }
     setState(() {
       if (tx.transferId != null) {
         for (final item in widget.portfolios) {
@@ -1939,6 +2048,7 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
         }
       }
     });
+    await widget.onDeleted(removedIds.toList());
     if (mounted)
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Transaction deleted and balance reversed.')));
@@ -2150,6 +2260,27 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
   Portfolio portfolio(String id) =>
       widget.portfolios.firstWhere((item) => item.id == id,
           orElse: () => widget.portfolios.first);
+  void removeDuplicates() {
+    final seen = <String>{};
+    final duplicateIds = <String>{};
+    for (final plan in widget.plans) {
+      final key =
+          '${plan.portfolioId}|${plan.description.trim().toLowerCase()}|'
+          '${plan.category}|${plan.amount.toStringAsFixed(2)}';
+      if (!seen.add(key)) duplicateIds.add(plan.id);
+    }
+    if (duplicateIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No duplicate monthly plans found.')));
+      return;
+    }
+    setState(() {
+      widget.plans.removeWhere((plan) => duplicateIds.contains(plan.id));
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${duplicateIds.length} duplicate plan(s) removed.')));
+  }
+
   Future<void> edit([MonthlyPlan? existing]) async {
     final description =
         TextEditingController(text: existing?.description ?? '');
@@ -2293,7 +2424,12 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
     final plans = [...widget.plans]
       ..sort((a, b) => a.dueDay.compareTo(b.dueDay));
     return Scaffold(
-        appBar: AppBar(title: const Text('Monthly plans')),
+        appBar: AppBar(title: const Text('Monthly plans'), actions: [
+          IconButton(
+              tooltip: 'Remove duplicate plans',
+              onPressed: removeDuplicates,
+              icon: const Icon(Icons.content_copy_outlined))
+        ]),
         body: plans.isEmpty
             ? const Center(child: Text('No monthly plans yet.'))
             : ListView(padding: const EdgeInsets.all(20), children: [
