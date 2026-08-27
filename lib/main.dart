@@ -391,7 +391,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       ['Family personal expenses', 'Personal transfer', 1000.0, false],
       ['Restaurants & entertainment', 'Restaurant', 500.0, false]
     ];
-    monthlyPlans = data.asMap().entries.map((entry) {
+    final starterPlans = data.asMap().entries.map((entry) {
       final item = entry.value;
       final transfer = item[3] as bool;
       return MonthlyPlan(
@@ -404,6 +404,24 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           savingsTransfer: transfer,
           destinationPortfolioId: transfer ? reserve.id : null);
     }).toList();
+    final existingIds = monthlyPlans.map((plan) => plan.id).toSet();
+    monthlyPlans
+        .addAll(starterPlans.where((plan) => !existingIds.contains(plan.id)));
+  }
+
+  bool deduplicateMonthlyPlans() {
+    final seen = <String>{};
+    final unique = <MonthlyPlan>[];
+    for (final plan in monthlyPlans) {
+      final key =
+          '${plan.portfolioId}|${plan.description.trim().toLowerCase()}|'
+          '${plan.category}|${plan.amount.toStringAsFixed(2)}|${plan.dueDay}|'
+          '${plan.savingsTransfer}|${plan.destinationPortfolioId ?? ''}';
+      if (seen.add(key)) unique.add(plan);
+    }
+    if (unique.length == monthlyPlans.length) return false;
+    monthlyPlans = unique;
+    return true;
   }
 
   void upgradeStarterPlanCategories() {
@@ -475,6 +493,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     var needsStarterPlans = false;
     var needsCategoryUpgrade = false;
     var needsSharedCapsMigration = false;
+    var needsPlanDeduplication = false;
     if (raw != null) {
       final d = jsonDecode(raw) as Map<String, dynamic>;
       profileName = d['name'] ?? '';
@@ -523,7 +542,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       monthlyPlans = (d['monthlyPlans'] as List? ?? [])
           .map((x) => MonthlyPlan.fromJson(x))
           .toList();
-      needsStarterPlans = d['monthlyPlansSeeded'] != true;
+      // Older snapshots do not have this marker, but may already contain
+      // user-managed plans. Seed only an actually empty plan list.
+      needsStarterPlans =
+          monthlyPlans.isEmpty && d['monthlyPlansSeeded'] != true;
+      needsPlanDeduplication = deduplicateMonthlyPlans();
       needsCategoryUpgrade = d['monthlyPlanCategoryVersion'] != 2;
       selected = d['selectedId'] ?? portfolios.first.id;
     }
@@ -543,7 +566,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         loading = false;
         locked = biometricEnabled;
       });
-    if (needsStarterPlans || needsCategoryUpgrade || needsSharedCapsMigration) {
+    if (needsStarterPlans ||
+        needsCategoryUpgrade ||
+        needsSharedCapsMigration ||
+        needsPlanDeduplication) {
       await save();
     } else {
       await _reminders.schedule(monthlyPlans, portfolios);
@@ -2766,7 +2792,8 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
     for (final plan in widget.plans) {
       final key =
           '${plan.portfolioId}|${plan.description.trim().toLowerCase()}|'
-          '${plan.category}|${plan.amount.toStringAsFixed(2)}';
+          '${plan.category}|${plan.amount.toStringAsFixed(2)}|${plan.dueDay}|'
+          '${plan.savingsTransfer}|${plan.destinationPortfolioId ?? ''}';
       if (!seen.add(key)) duplicateIds.add(plan.id);
     }
     if (duplicateIds.isEmpty) {
