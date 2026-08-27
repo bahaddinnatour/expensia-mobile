@@ -305,6 +305,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   var portfolios = <Portfolio>[];
   var globalCategoryCaps = <String, Map<String, double>>{};
   var showGlobalTransactions = false;
+  var showGlobalReport = false;
   var monthlyPlans = <MonthlyPlan>[];
   var selected = '';
   var profileName = '';
@@ -1035,6 +1036,19 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                         label: const Text('Unlock'))
                   ]))));
     final signedIn = _cloud.auth.currentUser != null;
+    final reportPortfolios = showGlobalReport
+        ? portfolios
+            .where((portfolio) => portfolio.currency == current.currency)
+        : [current];
+    final reportPortfolio = showGlobalReport
+        ? Portfolio(
+            id: 'global-${current.currency.name}',
+            name: 'All ${current.currency.nameLabel} portfolios',
+            currency: current.currency,
+            transactions: reportPortfolios
+                .expand((portfolio) => portfolio.transactions)
+                .toList())
+        : current;
     final recentTransactions = (showGlobalTransactions
             ? portfolios.expand((portfolio) => portfolio.transactions.map(
                 (transaction) =>
@@ -1098,15 +1112,38 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     ]
                   ]))),
           const SizedBox(height: 14),
+          Row(children: [
+            Expanded(
+                child: Text('Report scope',
+                    style: Theme.of(c).textTheme.titleSmall)),
+            SegmentedButton<bool>(
+                segments: [
+                  const ButtonSegment(
+                      value: false, label: Text('This portfolio')),
+                  ButtonSegment(
+                      value: true,
+                      label: Text('All ${current.currency.nameLabel}'))
+                ],
+                selected: {
+                  showGlobalReport
+                },
+                onSelectionChanged: (value) =>
+                    setState(() => showGlobalReport = value.first))
+          ]),
+          const SizedBox(height: 8),
           _ReportGraph(
-              inflow: total(true),
-              outflow: total(false),
+              inflow: reportPortfolio.transactions
+                  .where((tx) => tx.inflow)
+                  .fold(0, (sum, tx) => sum + tx.amount),
+              outflow: reportPortfolio.transactions
+                  .where((tx) => !tx.inflow)
+                  .fold(0, (sum, tx) => sum + tx.amount),
               currency: current.currency,
               onTap: () => Navigator.push(
                   c,
                   MaterialPageRoute(
                       builder: (_) => CategoryReportPage(
-                          portfolio: current, icons: categoryIcons)))),
+                          portfolio: reportPortfolio, icons: categoryIcons)))),
           const SizedBox(height: 14),
           Row(children: [
             Expanded(
