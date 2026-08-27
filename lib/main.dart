@@ -1481,11 +1481,22 @@ class _SettingsState extends State<Settings> {
                       child: const Text('Reset portfolio'))
                 ]));
     if (confirmed != true) return;
+    // Also clear a legacy plan marker when its recorded transaction is in this
+    // portfolio. This keeps resets correct after portfolios have been renamed.
+    final planIdsToReset = monthlyPlans
+        .where((plan) =>
+            plan.portfolioId == portfolio.id ||
+            portfolio.transactions.any((tx) =>
+                !tx.inflow &&
+                tx.description == plan.description &&
+                tx.amount == plan.amount))
+        .map((plan) => plan.id)
+        .toSet();
     setState(() {
       portfolio.transactions.clear();
       portfolio.opening = 0;
       monthlyPlans = monthlyPlans
-          .map((plan) => plan.portfolioId != portfolio.id
+          .map((plan) => !planIdsToReset.contains(plan.id)
               ? plan
               : MonthlyPlan(
                   id: plan.id,
