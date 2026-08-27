@@ -833,6 +833,20 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     child: const Text('Close'))
               ]));
   Future<void> settings() async {
+    Future<void> applySettings(_SettingsData data) async {
+      setState(() {
+        portfolios = data.portfolios;
+        selected = data.selected;
+        profileName = data.name;
+        email = data.email;
+        categories = data.categories;
+        categoryIcons = data.categoryIcons;
+        monthlyPlans = data.monthlyPlans;
+        biometricEnabled = data.biometricEnabled;
+      });
+      await save();
+    }
+
     final r = await Navigator.push<_SettingsData>(
         context,
         MaterialPageRoute(
@@ -847,19 +861,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     monthlyPlans: monthlyPlans,
                     biometricEnabled: biometricEnabled),
                 cloudSignedIn: _cloud.auth.currentUser != null,
-                onCloudAccount: connectCloud)));
+                onCloudAccount: connectCloud,
+                onSave: applySettings)));
     if (r != null) {
-      setState(() {
-        portfolios = r.portfolios;
-        selected = r.selected;
-        profileName = r.name;
-        email = r.email;
-        categories = r.categories;
-        categoryIcons = r.categoryIcons;
-        monthlyPlans = r.monthlyPlans;
-        biometricEnabled = r.biometricEnabled;
-      });
-      save();
+      await applySettings(r);
     }
   }
 
@@ -1321,10 +1326,12 @@ class Settings extends StatefulWidget {
       {super.key,
       required this.data,
       required this.cloudSignedIn,
-      required this.onCloudAccount});
+      required this.onCloudAccount,
+      required this.onSave});
   final _SettingsData data;
   final bool cloudSignedIn;
   final Future<void> Function() onCloudAccount;
+  final Future<void> Function(_SettingsData data) onSave;
   @override
   State<Settings> createState() => _SettingsState();
 }
@@ -1492,9 +1499,18 @@ class _SettingsState extends State<Settings> {
                   recurring: plan.recurring))
           .toList();
     });
+    await widget.onSave(_SettingsData(
+        portfolios: portfolios,
+        selected: selected,
+        name: name.text.trim(),
+        email: email.text.trim(),
+        categories: categories,
+        categoryIcons: categoryIcons,
+        monthlyPlans: monthlyPlans,
+        biometricEnabled: biometricEnabled));
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${portfolio.name} has been reset.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${portfolio.name} has been reset and synced.')));
     }
   }
 
