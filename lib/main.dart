@@ -1003,6 +1003,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                         label: const Text('Unlock'))
                   ]))));
     final signedIn = _cloud.auth.currentUser != null;
+    final recentTransactions = [...current.transactions]
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return Scaffold(
         appBar: AppBar(
             title: Text(profileName.isEmpty
@@ -1071,11 +1073,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           const SizedBox(height: 24),
           Text('Transactions', style: Theme.of(c).textTheme.titleLarge),
           const SizedBox(height: 8),
-          if (current.transactions.isEmpty)
+          if (recentTransactions.isEmpty)
             const Padding(
                 padding: EdgeInsets.all(20),
                 child: const Text('No transactions yet.')),
-          ...current.transactions.map((t) => Card(
+          ...recentTransactions.map((t) => Card(
               child: ListTile(
                   onTap: () => showDetails(t),
                   leading: CircleAvatar(
