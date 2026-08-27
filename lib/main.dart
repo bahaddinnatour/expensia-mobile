@@ -1432,6 +1432,30 @@ class _SettingsState extends State<Settings> {
       });
   }
 
+  Future<void> renamePortfolio(Portfolio portfolio) async {
+    final name = TextEditingController(text: portfolio.name);
+    final updatedName = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('Rename portfolio'),
+                content: TextField(
+                    controller: name,
+                    autofocus: true,
+                    decoration:
+                        const InputDecoration(labelText: 'Portfolio name')),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx, name.text),
+                      child: const Text('Save'))
+                ]));
+    if (updatedName != null && updatedName.trim().isNotEmpty) {
+      setState(() => portfolio.name = updatedName.trim());
+    }
+  }
+
   Future<void> resetPortfolio(Portfolio portfolio) async {
     final confirmed = await showDialog<bool>(
         context: context,
@@ -1631,6 +1655,10 @@ class _SettingsState extends State<Settings> {
                 title: Text(p.name),
                 subtitle: Text(p.currency.nameLabel),
                 trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                  IconButton(
+                      tooltip: 'Rename portfolio',
+                      onPressed: () => renamePortfolio(p),
+                      icon: const Icon(Icons.edit_outlined)),
                   IconButton(
                       tooltip: 'Reset portfolio data',
                       onPressed: () => resetPortfolio(p),
