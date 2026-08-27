@@ -545,7 +545,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           'name': profileName,
           'email': email,
           'selectedId': selected,
-          'biometricEnabled': biometricEnabled
+          'biometricEnabled': biometricEnabled,
+          'globalCategoryCaps': globalCategoryCaps,
+          'capsSharedVersion': 1
         }
       },
       {
