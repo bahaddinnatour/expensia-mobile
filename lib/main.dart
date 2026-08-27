@@ -1438,7 +1438,7 @@ class _SettingsState extends State<Settings> {
         builder: (ctx) => AlertDialog(
                 title: Text('Reset ${portfolio.name}?'),
                 content: const Text(
-                    'This permanently clears all transactions in this portfolio and restores its balance to the opening amount. Category caps and portfolio settings are kept.'),
+                    'This permanently clears all transactions and resets the portfolio amount to zero. Category caps and portfolio settings are kept.'),
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(ctx, false),
@@ -1452,6 +1452,7 @@ class _SettingsState extends State<Settings> {
     if (confirmed != true) return;
     setState(() {
       portfolio.transactions.clear();
+      portfolio.opening = 0;
       monthlyPlans = monthlyPlans
           .map((plan) => plan.portfolioId != portfolio.id
               ? plan
