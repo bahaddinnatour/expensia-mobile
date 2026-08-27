@@ -225,12 +225,16 @@ class MonthlyPlan {
       lastSkippedMonth: x['lastSkippedMonth']);
 }
 
+enum PortfolioType { bank, creditCard }
+
 class Portfolio {
   Portfolio(
       {required this.id,
       required this.name,
       this.opening = 0,
       this.currency = Currency.sar,
+      this.type = PortfolioType.bank,
+      this.creditLimit = 0,
       List<Tx>? transactions,
       Map<String, double>? categoryCaps})
       : transactions = transactions ?? [],
@@ -239,16 +243,25 @@ class Portfolio {
   String name;
   double opening;
   Currency currency;
+  PortfolioType type;
+  double creditLimit;
   List<Tx> transactions;
   Map<String, double> categoryCaps;
   double get balance =>
       opening +
       transactions.fold(0, (sum, t) => sum + (t.inflow ? t.amount : -t.amount));
+  bool get isCreditCard => type == PortfolioType.creditCard;
+  double get outstanding => isCreditCard ? -balance : 0;
+  double get availableCredit =>
+      (creditLimit - outstanding).clamp(0, creditLimit).toDouble();
+  double get utilization => creditLimit <= 0 ? 0 : outstanding / creditLimit;
   Map<String, dynamic> json() => {
         'id': id,
         'name': name,
         'opening': opening,
         'currency': currency.name,
+        'type': type.name,
+        'creditLimit': creditLimit,
         'transactions': transactions.map((x) => x.json()).toList(),
         'categoryCaps': categoryCaps
       };
@@ -258,6 +271,9 @@ class Portfolio {
       opening: (x['opening'] as num? ?? x['balance'] as num? ?? 0).toDouble(),
       currency: Currency.values.firstWhere((c) => c.name == x['currency'],
           orElse: () => Currency.sar),
+      type: PortfolioType.values.firstWhere((type) => type.name == x['type'],
+          orElse: () => PortfolioType.bank),
+      creditLimit: (x['creditLimit'] as num? ?? 0).toDouble(),
       transactions: (x['transactions'] as List? ?? [])
           .map((t) => Tx.fromJson(t))
           .toList(),
@@ -1041,8 +1057,22 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   child: Column(children: [
                     Text(current.name, style: Theme.of(c).textTheme.titleLarge),
                     Text(
-                        '${current.currency.symbol} ${current.balance.toStringAsFixed(2)}',
-                        style: Theme.of(c).textTheme.displaySmall)
+                        '${current.currency.symbol} ${(current.isCreditCard ? current.outstanding : current.balance).toStringAsFixed(2)}',
+                        style: Theme.of(c).textTheme.displaySmall),
+                    if (current.isCreditCard) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                          'Outstanding of ${current.currency.symbol} ${current.creditLimit.toStringAsFixed(2)} limit'),
+                      const SizedBox(height: 6),
+                      LinearProgressIndicator(
+                          value: current.utilization.clamp(0, 1).toDouble(),
+                          color: current.utilization >= .9
+                              ? Colors.red
+                              : Colors.blue),
+                      const SizedBox(height: 6),
+                      Text(
+                          'Available credit: ${current.currency.symbol} ${current.availableCredit.toStringAsFixed(2)} (${(current.utilization * 100).toStringAsFixed(1)}% used)')
+                    ]
                   ]))),
           const SizedBox(height: 14),
           _ReportGraph(
@@ -1060,7 +1090,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 child: FilledButton.icon(
                     onPressed: () => addTx(true),
                     icon: const Icon(Icons.add),
-                    label: const Text('Add inflow'))),
+                    label: Text(
+                        current.isCreditCard ? 'Add payment' : 'Add inflow'))),
             const SizedBox(width: 10),
             Expanded(
                 child: FilledButton.icon(
@@ -1068,7 +1099,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                         backgroundColor: Colors.red.shade700),
                     onPressed: () => addTx(false),
                     icon: const Icon(Icons.remove),
-                    label: const Text('Add outflow')))
+                    label: Text(current.isCreditCard
+                        ? 'Add card charge'
+                        : 'Add outflow')))
           ]),
           const SizedBox(height: 24),
           Text('Transactions', style: Theme.of(c).textTheme.titleLarge),
@@ -1407,6 +1440,8 @@ class _SettingsState extends State<Settings> {
             name: p.name,
             opening: p.opening,
             currency: p.currency,
+            type: p.type,
+            creditLimit: p.creditLimit,
             transactions: [...p.transactions],
             categoryCaps: {...p.categoryCaps}))
         .toList();
@@ -1481,8 +1516,11 @@ class _SettingsState extends State<Settings> {
 
   Future<void> addPortfolio() async {
     final n = TextEditingController();
+    final limit = TextEditingController();
     var currency = current.currency;
-    final r = await showDialog<String>(
+    var type = PortfolioType.bank;
+    final r = await showDialog<
+            ({String name, PortfolioType type, double limit})>(
         context: context,
         builder: (ctx) => StatefulBuilder(
             builder: (ctx, setD) => AlertDialog(
@@ -1498,22 +1536,58 @@ class _SettingsState extends State<Settings> {
                               .map((x) => DropdownMenuItem(
                                   value: x, child: Text(x.nameLabel)))
                               .toList(),
-                          onChanged: (v) => setD(() => currency = v!))
+                          onChanged: (v) => setD(() => currency = v!)),
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<PortfolioType>(
+                          initialValue: type,
+                          decoration: const InputDecoration(
+                              labelText: 'Portfolio type'),
+                          items: const [
+                            DropdownMenuItem(
+                                value: PortfolioType.bank,
+                                child: Text('Bank / cash account')),
+                            DropdownMenuItem(
+                                value: PortfolioType.creditCard,
+                                child: Text('Credit card'))
+                          ],
+                          onChanged: (v) => setD(() => type = v!)),
+                      if (type == PortfolioType.creditCard) ...[
+                        const SizedBox(height: 10),
+                        TextField(
+                            controller: limit,
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true),
+                            decoration: InputDecoration(
+                                labelText: 'Credit limit',
+                                prefixText: '${currency.symbol} '))
+                      ]
                     ]),
                     actions: [
                       TextButton(
                           onPressed: () => Navigator.pop(ctx),
                           child: const Text('Cancel')),
                       FilledButton(
-                          onPressed: () => Navigator.pop(ctx, n.text),
+                          onPressed: () => Navigator.pop(ctx, (
+                                name: n.text,
+                                type: type,
+                                limit: double.tryParse(
+                                        limit.text.replaceAll(',', '')) ??
+                                    0
+                              )),
                           child: const Text('Add'))
                     ])));
-    if (r != null && r.trim().isNotEmpty)
+    n.dispose();
+    limit.dispose();
+    if (r != null &&
+        r.name.trim().isNotEmpty &&
+        (r.type != PortfolioType.creditCard || r.limit > 0))
       setState(() {
         final p = Portfolio(
             id: DateTime.now().microsecondsSinceEpoch.toString(),
-            name: r.trim(),
-            currency: currency);
+            name: r.name.trim(),
+            currency: currency,
+            type: r.type,
+            creditLimit: r.limit);
         portfolios.add(p);
         selected = p.id;
       });
@@ -1833,9 +1907,13 @@ class _SettingsState extends State<Settings> {
                 onTap: () => setState(() => selected = p.id),
                 leading: Icon(p.id == selected
                     ? Icons.check_circle
-                    : Icons.account_balance_wallet_outlined),
+                    : p.isCreditCard
+                        ? Icons.credit_card
+                        : Icons.account_balance_wallet_outlined),
                 title: Text(p.name),
-                subtitle: Text(p.currency.nameLabel),
+                subtitle: Text(p.isCreditCard
+                    ? '${p.currency.nameLabel} - limit ${p.currency.symbol} ${p.creditLimit.toStringAsFixed(2)}'
+                    : p.currency.nameLabel),
                 trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                   IconButton(
                       tooltip: 'Rename portfolio',
