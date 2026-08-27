@@ -1138,8 +1138,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   const ButtonSegment(
                       value: false, label: Text('This portfolio')),
                   ButtonSegment(
-                      value: true,
-                      label: const Text('All portfolios'))
+                      value: true, label: const Text('All portfolios'))
                 ],
                 selected: {
                   showGlobalReport
@@ -2092,10 +2091,14 @@ class AllTransactionsPage extends StatefulWidget {
 }
 
 class _AllTransactionsPageState extends State<AllTransactionsPage> {
+  var showAllPortfolios = true;
+
   List<(Portfolio, Tx)> get entries {
     final result = <(Portfolio, Tx)>[];
     for (final portfolio in widget.portfolios) {
-      if (portfolio.id != widget.selectedPortfolioId) continue;
+      if (!showAllPortfolios && portfolio.id != widget.selectedPortfolioId) {
+        continue;
+      }
       for (final tx in portfolio.transactions) {
         result.add((portfolio, tx));
       }
@@ -2268,36 +2271,65 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
     final data = entries;
     return Scaffold(
         appBar: AppBar(title: const Text('Transaction history')),
-        body: data.isEmpty
-            ? const Center(child: Text('No transactions yet.'))
-            : ListView(
-                padding: const EdgeInsets.all(16),
-                children: data.map((entry) {
-                  final portfolio = entry.$1;
-                  final tx = entry.$2;
-                  return Card(
-                      child: ListTile(
-                          onTap: () => edit(portfolio, tx),
-                          leading: CircleAvatar(
-                              child: Icon(
-                                  _categoryIcon(tx.category, widget.icons))),
-                          title: Text(tx.description),
-                          subtitle: Text(
-                              '${portfolio.name} - ${tx.category}\n${_shortDateTime(tx.createdAt)}'),
-                          isThreeLine: true,
-                          trailing:
-                              Row(mainAxisSize: MainAxisSize.min, children: [
-                            Text(
-                                '${tx.inflow ? '+' : '-'}${portfolio.currency.symbol} ${tx.amount.toStringAsFixed(2)}',
-                                style: TextStyle(
-                                    color: tx.inflow ? Colors.teal : Colors.red,
-                                    fontWeight: FontWeight.bold)),
-                            IconButton(
-                                tooltip: 'Delete and reverse',
-                                onPressed: () => remove(portfolio, tx),
-                                icon: const Icon(Icons.delete_outline))
-                          ])));
-                }).toList()));
+        body: Column(children: [
+          Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Row(children: [
+                const Expanded(child: Text('History scope')),
+                SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(
+                          value: false, label: Text('This portfolio')),
+                      ButtonSegment(value: true, label: Text('All portfolios'))
+                    ],
+                    selected: {
+                      showAllPortfolios
+                    },
+                    onSelectionChanged: (value) =>
+                        setState(() => showAllPortfolios = value.first))
+              ])),
+          Expanded(
+              child: data.isEmpty
+                  ? const Center(child: Text('No transactions yet.'))
+                  : ListView(
+                      padding: const EdgeInsets.all(16),
+                      children: data.map((entry) {
+                        final portfolio = entry.$1;
+                        final tx = entry.$2;
+                        return Card(
+                            child: ListTile(
+                                onTap: () => edit(portfolio, tx),
+                                leading: CircleAvatar(
+                                    child: Icon(_categoryIcon(
+                                        tx.category, widget.icons))),
+                                title: Text(tx.description),
+                                subtitle: Text(
+                                    '${portfolio.name} - ${tx.category}\n${_shortDateTime(tx.createdAt)}'),
+                                isThreeLine: true,
+                                trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                          '${tx.inflow ? '+' : '-'}${portfolio.currency.symbol} ${tx.amount.toStringAsFixed(2)}',
+                                          style: TextStyle(
+                                              color: tx.inflow
+                                                  ? Colors.teal
+                                                  : Colors.red,
+                                              fontWeight: FontWeight.bold)),
+                                      IconButton(
+                                          tooltip: 'Edit transaction',
+                                          onPressed: () => edit(portfolio, tx),
+                                          icon:
+                                              const Icon(Icons.edit_outlined)),
+                                      IconButton(
+                                          tooltip: 'Delete and reverse',
+                                          onPressed: () =>
+                                              remove(portfolio, tx),
+                                          icon:
+                                              const Icon(Icons.delete_outline))
+                                    ])));
+                      }).toList()))
+        ]));
   }
 }
 
