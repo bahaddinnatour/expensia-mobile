@@ -492,7 +492,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               currency.toString(),
               (caps as Map).map((category, amount) =>
                   MapEntry(category.toString(), (amount as num).toDouble()))));
-      if (d['capsSharedVersion'] != 1) {
+      if (d['capsSharedVersion'] != 2) {
         for (final portfolio in portfolios) {
           final shared = globalCategoryCaps.putIfAbsent(
               portfolio.currency.name, () => <String, double>{});
@@ -547,7 +547,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           'selectedId': selected,
           'biometricEnabled': biometricEnabled,
           'globalCategoryCaps': globalCategoryCaps,
-          'capsSharedVersion': 1
+          'capsSharedVersion': 2
         }
       },
       {
@@ -594,7 +594,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       'categories': categories,
       'categoryIcons': categoryIcons,
       'globalCategoryCaps': globalCategoryCaps,
-      'capsSharedVersion': 1,
+      'capsSharedVersion': 2,
       'categoryVersion': 2,
       'selectedId': selected,
       'portfolios': portfolios.map((p) => p.json()).toList(),
