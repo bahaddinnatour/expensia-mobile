@@ -304,6 +304,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   final _cloud = Supabase.instance.client;
   var portfolios = <Portfolio>[];
   var globalCategoryCaps = <String, Map<String, double>>{};
+  var showGlobalTransactions = false;
   var monthlyPlans = <MonthlyPlan>[];
   var selected = '';
   var profileName = '';
@@ -863,7 +864,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> showDetails(Tx tx) => showDialog<void>(
+  Future<void> showDetails(Tx tx, [Portfolio? portfolio]) => showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
               title: Text(tx.inflow ? 'Inflow details' : 'Outflow details'),
@@ -875,10 +876,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                         style: const TextStyle(
                             fontSize: 20, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 16),
-                    Text('Portfolio: ${current.name}'),
+                    Text('Portfolio: ${(portfolio ?? current).name}'),
                     Text('Category: ${tx.category}'),
                     Text(
-                        'Amount: ${current.currency.symbol} ${tx.amount.toStringAsFixed(2)}'),
+                        'Amount: ${(portfolio ?? current).currency.symbol} ${tx.amount.toStringAsFixed(2)}'),
                     Text('Date: ${_shortDateTime(tx.createdAt)}'),
                     Text('Day: ${_dayName(tx.createdAt)}')
                   ]),
@@ -1034,8 +1035,15 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                         label: const Text('Unlock'))
                   ]))));
     final signedIn = _cloud.auth.currentUser != null;
-    final recentTransactions = [...current.transactions]
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final recentTransactions = (showGlobalTransactions
+            ? portfolios.expand((portfolio) => portfolio.transactions.map(
+                (transaction) =>
+                    (portfolio: portfolio, transaction: transaction)))
+            : current.transactions.map((transaction) =>
+                (portfolio: current, transaction: transaction)))
+        .toList()
+      ..sort(
+          (a, b) => b.transaction.createdAt.compareTo(a.transaction.createdAt));
     return Scaffold(
         appBar: AppBar(
             title: Text(profileName.isEmpty
@@ -1119,25 +1127,42 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                         : 'Add outflow')))
           ]),
           const SizedBox(height: 24),
-          Text('Transactions', style: Theme.of(c).textTheme.titleLarge),
+          Row(children: [
+            Text('Transactions', style: Theme.of(c).textTheme.titleLarge),
+            const Spacer(),
+            SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: false, label: Text('This portfolio')),
+                  ButtonSegment(value: true, label: Text('All portfolios'))
+                ],
+                selected: {
+                  showGlobalTransactions
+                },
+                onSelectionChanged: (value) =>
+                    setState(() => showGlobalTransactions = value.first))
+          ]),
           const SizedBox(height: 8),
           if (recentTransactions.isEmpty)
             const Padding(
                 padding: EdgeInsets.all(20),
                 child: const Text('No transactions yet.')),
-          ...recentTransactions.map((t) => Card(
-              child: ListTile(
-                  onTap: () => showDetails(t),
-                  leading: CircleAvatar(
-                      child: Icon(_categoryIcon(t.category, categoryIcons))),
-                  title: Text(t.description),
-                  subtitle:
-                      Text('${t.category} - ${_shortDateTime(t.createdAt)}'),
-                  trailing: Text(
-                      '${t.inflow ? '+' : '-'}${current.currency.symbol} ${t.amount.toStringAsFixed(2)}',
-                      style: TextStyle(
-                          color: t.inflow ? Colors.teal : Colors.red,
-                          fontWeight: FontWeight.bold)))))
+          ...recentTransactions.take(12).map((entry) {
+            final portfolio = entry.portfolio;
+            final t = entry.transaction;
+            return Card(
+                child: ListTile(
+                    onTap: () => showDetails(t, portfolio),
+                    leading: CircleAvatar(
+                        child: Icon(_categoryIcon(t.category, categoryIcons))),
+                    title: Text(t.description),
+                    subtitle: Text(
+                        '${showGlobalTransactions ? '${portfolio.name} - ' : ''}${t.category} - ${_shortDateTime(t.createdAt)}'),
+                    trailing: Text(
+                        '${t.inflow ? '+' : '-'}${portfolio.currency.symbol} ${t.amount.toStringAsFixed(2)}',
+                        style: TextStyle(
+                            color: t.inflow ? Colors.teal : Colors.red,
+                            fontWeight: FontWeight.bold))));
+          })
         ]));
   }
 }
