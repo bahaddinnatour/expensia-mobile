@@ -305,7 +305,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   var portfolios = <Portfolio>[];
   var globalCategoryCaps = <String, Map<String, double>>{};
   var showGlobalTransactions = false;
-  var showGlobalReport = false;
+  var showGlobalReport = true;
   var monthlyPlans = <MonthlyPlan>[];
   var selected = '';
   var profileName = '';
@@ -1060,7 +1060,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     final reportPortfolio = showGlobalReport
         ? Portfolio(
             id: 'global-${current.currency.name}',
-            name: 'All ${current.currency.nameLabel} portfolios',
+            name: 'All portfolios',
             currency: current.currency,
             transactions: reportPortfolios
                 .expand((portfolio) => portfolio.transactions)
@@ -1139,7 +1139,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                       value: false, label: Text('This portfolio')),
                   ButtonSegment(
                       value: true,
-                      label: Text('All ${current.currency.nameLabel}'))
+                      label: const Text('All portfolios'))
                 ],
                 selected: {
                   showGlobalReport
