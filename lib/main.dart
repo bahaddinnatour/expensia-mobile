@@ -74,6 +74,21 @@ extension CurrencyInfo on Currency {
   String get symbol => this == Currency.usd ? '\$' : name.toUpperCase();
 }
 
+String _monthName(int month) => const [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December'
+    ][month - 1];
+
 class PlanReminderService {
   final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
@@ -95,7 +110,7 @@ class PlanReminderService {
   Future<void> schedule(
       List<MonthlyPlan> plans, List<Portfolio> portfolios) async {
     if (!_ready) return;
-    for (var id = 9000; id < 9010; id++) {
+    for (var id = 9000; id < 9200; id++) {
       await _notifications.cancel(id: id);
     }
     final now = tz.TZDateTime.now(tz.local);
@@ -103,28 +118,28 @@ class PlanReminderService {
     for (var offset = 0; offset < 3; offset++) {
       final month = DateTime(now.year, now.month + offset);
       final lastDay = DateTime(month.year, month.month + 1, 0).day;
-      final days = <int>{if (lastDay >= 30) 30, lastDay};
-      for (final day in days) {
-        final target = tz.TZDateTime(tz.local, month.year, month.month, day, 9);
-        if (!target.isAfter(now)) continue;
-        final pending = plans
-            .where((plan) => !_planCreatedInMonth(plan, portfolios, target))
-            .toList();
-        if (pending.isEmpty) continue;
-        final names = pending.map((plan) => plan.description).join(', ');
-        await _notifications.zonedSchedule(
-            id: notificationId++,
-            title: 'Monthly plans pending',
-            body: 'Create: $names',
-            scheduledDate: target,
-            notificationDetails: const NotificationDetails(
-                android: AndroidNotificationDetails(
-                    'monthly_plan_reminders', 'Monthly plan reminders',
-                    channelDescription:
-                        'Reminders for monthly plans that have not been created',
-                    importance: Importance.high,
-                    priority: Priority.high)),
-            androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle);
+      for (final plan in plans.where((plan) => plan.recurring)) {
+        final dueDay = plan.dueDay.clamp(1, lastDay).toInt();
+        final due = tz.TZDateTime(tz.local, month.year, month.month, dueDay, 9);
+        final reminderDates = [due.subtract(const Duration(days: 1)), due];
+        for (var index = 0; index < reminderDates.length; index++) {
+          final target = reminderDates[index];
+          if (!target.isAfter(now) ||
+              _planCreatedInMonth(plan, portfolios, target)) continue;
+          await _notifications.zonedSchedule(
+              id: notificationId++,
+              title: index == 0 ? 'Bill due tomorrow' : 'Bill due today',
+              body: '${plan.description} - due day $dueDay',
+              scheduledDate: target,
+              notificationDetails: const NotificationDetails(
+                  android: AndroidNotificationDetails(
+                      'monthly_plan_reminders', 'Monthly plan reminders',
+                      channelDescription:
+                          'Due-date reminders for monthly plans',
+                      importance: Importance.high,
+                      priority: Priority.high)),
+              androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle);
+        }
       }
     }
   }
@@ -2552,6 +2567,9 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
     final ordered = [...widget.plans]
       ..sort((a, b) => a.dueDay.compareTo(b.dueDay));
     final now = DateTime.now();
+    final firstDay = DateTime(now.year, now.month, 1);
+    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
+    final calendarCells = firstDay.weekday % 7 + daysInMonth;
     return Scaffold(
       appBar: AppBar(title: const Text('Monthly plans')),
       body: ordered.isEmpty
@@ -2565,6 +2583,98 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                 const Text(
                     'Use Create now when you want to record a planned expense or savings transfer.'),
                 const SizedBox(height: 14),
+                Card(
+                    child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                  '${_monthName(now.month)} ${now.year} calendar',
+                                  style:
+                                      Theme.of(context).textTheme.titleMedium),
+                              const SizedBox(height: 10),
+                              const Row(children: [
+                                Expanded(child: Center(child: Text('Sun'))),
+                                Expanded(child: Center(child: Text('Mon'))),
+                                Expanded(child: Center(child: Text('Tue'))),
+                                Expanded(child: Center(child: Text('Wed'))),
+                                Expanded(child: Center(child: Text('Thu'))),
+                                Expanded(child: Center(child: Text('Fri'))),
+                                Expanded(child: Center(child: Text('Sat')))
+                              ]),
+                              const SizedBox(height: 4),
+                              GridView.builder(
+                                  shrinkWrap: true,
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  itemCount: calendarCells,
+                                  gridDelegate:
+                                      const SliverGridDelegateWithFixedCrossAxisCount(
+                                          crossAxisCount: 7,
+                                          childAspectRatio: .82),
+                                  itemBuilder: (context, index) {
+                                    final day =
+                                        index - firstDay.weekday % 7 + 1;
+                                    if (day < 1 || day > daysInMonth) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    final plans = ordered
+                                        .where((plan) => plan.dueDay == day)
+                                        .toList();
+                                    final pending = plans
+                                        .where((plan) =>
+                                            !createdThisMonth(plan, now))
+                                        .toList();
+                                    return InkWell(
+                                        borderRadius: BorderRadius.circular(6),
+                                        onTap: pending.length == 1
+                                            ? () => create(pending.first)
+                                            : null,
+                                        child: Container(
+                                            margin: const EdgeInsets.all(2),
+                                            padding: const EdgeInsets.all(4),
+                                            decoration: BoxDecoration(
+                                                color: day == now.day
+                                                    ? Colors.teal.shade50
+                                                    : plans.isEmpty
+                                                        ? null
+                                                        : Colors
+                                                            .blueGrey.shade50,
+                                                borderRadius:
+                                                    BorderRadius.circular(6),
+                                                border: Border.all(
+                                                    color: day == now.day
+                                                        ? Colors.teal
+                                                        : Colors.transparent)),
+                                            child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text('$day',
+                                                      style: const TextStyle(
+                                                          fontWeight:
+                                                              FontWeight.bold)),
+                                                  ...plans.take(2).map((plan) => Text(
+                                                      plan.description,
+                                                      maxLines: 2,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: TextStyle(
+                                                          fontSize: 8,
+                                                          color: createdThisMonth(
+                                                                  plan, now)
+                                                              ? Colors.blueGrey
+                                                              : Colors.teal
+                                                                  .shade800)))
+                                                ])));
+                                  }),
+                              const SizedBox(height: 8),
+                              const Text(
+                                  'Tap a date with one pending plan to create it. Use the list below for more options.',
+                                  style: TextStyle(
+                                      fontSize: 12, color: Colors.blueGrey))
+                            ]))),
+                const SizedBox(height: 8),
                 ...ordered.map((plan) {
                   final source = portfolio(plan.portfolioId);
                   final destination = plan.destinationPortfolioId == null
