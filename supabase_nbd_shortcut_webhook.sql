@@ -1,7 +1,5 @@
 -- Secure NBD Shortcut webhook. Run in Supabase SQL Editor once.
 -- Replace YOUR_EMAIL_ADDRESS and YOUR_NBD_PORTFOLIO_ID before running.
-create extension if not exists pgcrypto;
-
 create table if not exists public.shortcut_ingest_keys (
   user_id uuid not null references auth.users(id) on delete cascade,
   portfolio_id text not null,
@@ -32,7 +30,7 @@ begin
   select id into v_user from auth.users where email = lower(trim(p_email));
   if v_user is null then raise exception 'User not found'; end if;
   insert into public.shortcut_ingest_keys(user_id, portfolio_id, key_hash)
-  values(v_user, p_portfolio_id, encode(digest(v_key, 'sha256'), 'hex'))
+  values(v_user, p_portfolio_id, md5(v_key))
   on conflict(user_id, portfolio_id) do update set key_hash = excluded.key_hash, active = true, created_at = now(), last_used_at = null;
   return v_key;
 end;
@@ -52,12 +50,12 @@ declare v_user uuid; v_portfolio text; v_id text; v_tx jsonb;
 begin
   select user_id, portfolio_id into v_user, v_portfolio
   from public.shortcut_ingest_keys
-  where active and key_hash = encode(digest(p_key, 'sha256'), 'hex');
+  where active and key_hash = md5(p_key);
   if v_user is null then raise exception 'Invalid shortcut key'; end if;
   if coalesce(trim(p_description), '') = '' or coalesce(trim(p_category), '') = '' or p_amount <= 0 then
     raise exception 'Description, category, and positive amount are required';
   end if;
-  v_id := 'shortcut_' || encode(digest(p_external_id, 'sha256'), 'hex');
+  v_id := 'shortcut_' || md5(p_external_id);
   select payload into v_tx from public.finance_records where user_id = v_user and record_type = 'transaction' and record_id = v_id;
   if v_tx is not null then return v_tx || jsonb_build_object('duplicate', true); end if;
   v_tx := jsonb_build_object('id', v_id, 'description', trim(p_description), 'category', trim(p_category), 'amount', p_amount, 'inflow', false, 'createdAt', p_created_at);
