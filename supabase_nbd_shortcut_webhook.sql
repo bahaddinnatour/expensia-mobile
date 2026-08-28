@@ -3,13 +3,17 @@
 create extension if not exists pgcrypto;
 
 create table if not exists public.shortcut_ingest_keys (
-  user_id uuid primary key references auth.users(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
   portfolio_id text not null,
   key_hash text not null,
   active boolean not null default true,
   created_at timestamptz not null default now(),
   last_used_at timestamptz
 );
+
+-- Migration for the initial one-key-per-user version of this script.
+alter table public.shortcut_ingest_keys drop constraint if exists shortcut_ingest_keys_pkey;
+alter table public.shortcut_ingest_keys add primary key (user_id, portfolio_id);
 
 alter table public.shortcut_ingest_keys enable row level security;
 
@@ -29,7 +33,7 @@ begin
   if v_user is null then raise exception 'User not found'; end if;
   insert into public.shortcut_ingest_keys(user_id, portfolio_id, key_hash)
   values(v_user, p_portfolio_id, encode(digest(v_key, 'sha256'), 'hex'))
-  on conflict(user_id) do update set portfolio_id = excluded.portfolio_id, key_hash = excluded.key_hash, active = true, created_at = now(), last_used_at = null;
+  on conflict(user_id, portfolio_id) do update set key_hash = excluded.key_hash, active = true, created_at = now(), last_used_at = null;
   return v_key;
 end;
 $$;
