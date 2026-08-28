@@ -331,6 +331,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   var biometricEnabled = false;
   var locked = false;
   var cloudSynced = false;
+  var forceBackup = false;
   Portfolio get current => portfolios.firstWhere((p) => p.id == selected,
       orElse: () => portfolios.first);
   double total(bool inflow) => current.transactions
@@ -627,11 +628,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     await _cloud.from('finance_records').upsert(records);
   }
 
-  Future<void> createScheduledBackup(
-      User user, Map<String, dynamic> state) async {
+  Future<void> createScheduledBackup(User user, Map<String, dynamic> state,
+      {bool force = false}) async {
     final last = DateTime.tryParse(
         await _secureStorage.read(key: 'my_expensia_last_backup') ?? '');
-    if (last != null && DateTime.now().difference(last).inDays < 7) return;
+    if (!force && last != null && DateTime.now().difference(last).inDays < 7)
+      return;
     try {
       final records = await _cloud
           .from('finance_records')
@@ -687,10 +689,19 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           'updated_at': DateTime.now().toIso8601String()
         });
         await writeSharedRecords(user);
-        await createScheduledBackup(user, data);
+        await createScheduledBackup(user, data, force: forceBackup);
+        forceBackup = false;
       } catch (_) {}
     }
     await _reminders.schedule(monthlyPlans, portfolios);
+  }
+
+  Future<void> createManualBackup() async {
+    if (_cloud.auth.currentUser == null) {
+      throw Exception('Sign in to create a cloud backup.');
+    }
+    forceBackup = true;
+    await save();
   }
 
   Future<void> syncCloud() async {
@@ -1011,6 +1022,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     biometricEnabled: biometricEnabled),
                 cloudSignedIn: _cloud.auth.currentUser != null,
                 onCloudAccount: connectCloud,
+                onBackup: createManualBackup,
                 onSave: applySettings)));
     if (r != null) {
       await applySettings(r);
@@ -1852,10 +1864,12 @@ class Settings extends StatefulWidget {
       required this.data,
       required this.cloudSignedIn,
       required this.onCloudAccount,
+      required this.onBackup,
       required this.onSave});
   final _SettingsData data;
   final bool cloudSignedIn;
   final Future<void> Function() onCloudAccount;
+  final Future<void> Function() onBackup;
   final Future<void> Function(_SettingsData data) onSave;
   @override
   State<Settings> createState() => _SettingsState();
@@ -1870,6 +1884,7 @@ class _SettingsState extends State<Settings> {
   late List<MonthlyPlan> monthlyPlans;
   late Map<String, Map<String, double>> globalCategoryCaps;
   late bool biometricEnabled;
+  var backupsOpen = false;
   @override
   void initState() {
     super.initState();
@@ -2345,6 +2360,45 @@ class _SettingsState extends State<Settings> {
                 subtitle: const Text('Lock the app when it leaves the screen.'),
                 value: biometricEnabled,
                 onChanged: toggleBiometric),
+            ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.backup_outlined),
+                title: const Text('Import, export, and backups'),
+                trailing:
+                    Icon(backupsOpen ? Icons.expand_less : Icons.expand_more),
+                onTap: () => setState(() => backupsOpen = !backupsOpen)),
+            if (backupsOpen)
+              Card(
+                  child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                                'Automatic cloud backups run weekly while you use the app.'),
+                            const SizedBox(height: 10),
+                            FilledButton.icon(
+                                onPressed: widget.cloudSignedIn
+                                    ? () async {
+                                        try {
+                                          await widget.onBackup();
+                                          if (mounted)
+                                            ScaffoldMessenger.of(c)
+                                                .showSnackBar(const SnackBar(
+                                                    content: Text(
+                                                        'Cloud backup created.')));
+                                        } catch (error) {
+                                          if (mounted)
+                                            ScaffoldMessenger.of(c)
+                                                .showSnackBar(SnackBar(
+                                                    content: Text(
+                                                        error.toString())));
+                                        }
+                                      }
+                                    : null,
+                                icon: const Icon(Icons.cloud_upload_outlined),
+                                label: const Text('Create cloud backup'))
+                          ]))),
             const SizedBox(height: 20),
             const Text('Portfolios',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
