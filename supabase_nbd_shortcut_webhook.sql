@@ -56,11 +56,13 @@ begin
     raise exception 'Description, category, and positive amount are required';
   end if;
   v_id := 'shortcut_' || md5(p_external_id);
-  select payload into v_tx from public.finance_records where user_id = v_user and record_type = 'transaction' and record_id = v_id;
+  select payload into v_tx from public.finance_records where user_id = v_user and record_type = 'transaction' and record_id = v_id and deleted_at is null;
   if v_tx is not null then return v_tx || jsonb_build_object('duplicate', true); end if;
   v_tx := jsonb_build_object('id', v_id, 'description', trim(p_description), 'category', trim(p_category), 'amount', p_amount, 'inflow', false, 'createdAt', p_created_at);
-  insert into public.finance_records(user_id, record_type, record_id, payload, updated_at)
-  values(v_user, 'transaction', v_id, v_tx || jsonb_build_object('portfolioId', v_portfolio), now());
+  insert into public.finance_records(user_id, record_type, record_id, payload, updated_at, deleted_at)
+  values(v_user, 'transaction', v_id, v_tx || jsonb_build_object('portfolioId', v_portfolio), now(), null)
+  on conflict(user_id, record_type, record_id) do update set
+    payload = excluded.payload, updated_at = now(), deleted_at = null;
   update public.app_state set data = jsonb_set(data, '{portfolios}', (select jsonb_agg(case when item->>'id' = v_portfolio then jsonb_set(item, '{transactions}', jsonb_build_array(v_tx) || coalesce(item->'transactions', '[]'::jsonb)) else item end) from jsonb_array_elements(coalesce(data->'portfolios', '[]'::jsonb)) item), true), updated_at = now() where user_id = v_user;
   update public.flutter_app_state set data = jsonb_set(data, '{portfolios}', (select jsonb_agg(case when item->>'id' = v_portfolio then jsonb_set(item, '{transactions}', jsonb_build_array(v_tx) || coalesce(item->'transactions', '[]'::jsonb)) else item end) from jsonb_array_elements(coalesce(data->'portfolios', '[]'::jsonb)) item), true), updated_at = now() where user_id = v_user;
   update public.shortcut_ingest_keys set last_used_at = now() where user_id = v_user;
