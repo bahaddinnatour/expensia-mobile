@@ -977,6 +977,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       MaterialPageRoute(
           builder: (_) => DashboardPage(
               portfolios: portfolios, globalCaps: globalCategoryCaps)));
+  Future<void> openTrends() => Navigator.push<void>(context,
+      MaterialPageRoute(builder: (_) => TrendsPage(portfolios: portfolios)));
   Future<void> settings() async {
     Future<void> applySettings(_SettingsData data) async {
       setState(() {
@@ -1157,6 +1159,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   onPressed: openDashboard,
                   icon: const Icon(Icons.dashboard_outlined)),
               IconButton(
+                  tooltip: 'Spending trends',
+                  onPressed: openTrends,
+                  icon: const Icon(Icons.insights_outlined)),
+              IconButton(
                   tooltip: signedIn ? 'Cloud account connected' : 'Cloud login',
                   onPressed: connectCloud,
                   icon: Icon(signedIn ? Icons.cloud_done : Icons.cloud_outlined,
@@ -1291,6 +1297,128 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                             color: t.inflow ? Colors.teal : Colors.red,
                             fontWeight: FontWeight.bold))));
           })
+        ]));
+  }
+}
+
+class TrendsPage extends StatefulWidget {
+  const TrendsPage({super.key, required this.portfolios});
+  final List<Portfolio> portfolios;
+  @override
+  State<TrendsPage> createState() => _TrendsPageState();
+}
+
+class _TrendsPageState extends State<TrendsPage> {
+  late String selectedMonth;
+  List<String> get months => List.generate(6, (index) {
+        final date =
+            DateTime(DateTime.now().year, DateTime.now().month - 5 + index);
+        return '${date.year}-${date.month.toString().padLeft(2, '0')}';
+      });
+  @override
+  void initState() {
+    super.initState();
+    selectedMonth = months.last;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final all = widget.portfolios
+        .expand((portfolio) => portfolio.transactions)
+        .toList();
+    final selected = all
+        .where((transaction) =>
+            '${transaction.createdAt.year}-${transaction.createdAt.month.toString().padLeft(2, '0')}' ==
+            selectedMonth)
+        .toList();
+    final inflow = selected
+        .where((transaction) => transaction.inflow)
+        .fold(0.0, (sum, transaction) => sum + transaction.amount);
+    final outflow = selected
+        .where((transaction) => !transaction.inflow)
+        .fold(0.0, (sum, transaction) => sum + transaction.amount);
+    final total = inflow + outflow == 0 ? 1.0 : inflow + outflow;
+    final categories = <String, double>{};
+    for (final transaction
+        in selected.where((transaction) => !transaction.inflow)) {
+      categories[transaction.category] =
+          (categories[transaction.category] ?? 0) + transaction.amount;
+    }
+    final sortedCategories = categories.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return Scaffold(
+        appBar: AppBar(title: const Text('Spending trends')),
+        body: ListView(padding: const EdgeInsets.all(20), children: [
+          DropdownButtonFormField<String>(
+              value: selectedMonth,
+              decoration: const InputDecoration(labelText: 'Reporting month'),
+              items: months
+                  .map((month) =>
+                      DropdownMenuItem(value: month, child: Text(month)))
+                  .toList(),
+              onChanged: (month) => setState(() => selectedMonth = month!)),
+          const SizedBox(height: 16),
+          Card(
+              child: Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Column(children: [
+                    const Text('Inflow vs outflow',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                        width: 150,
+                        height: 150,
+                        child: Stack(alignment: Alignment.center, children: [
+                          CircularProgressIndicator(
+                              value: inflow / total,
+                              strokeWidth: 22,
+                              color: Colors.teal,
+                              backgroundColor: Colors.amber.shade300),
+                          Column(mainAxisSize: MainAxisSize.min, children: [
+                            Text(
+                                '${(outflow / total * 100).toStringAsFixed(0)}%',
+                                style: const TextStyle(
+                                    fontSize: 24, fontWeight: FontWeight.bold)),
+                            const Text('outflow')
+                          ])
+                        ])),
+                    const SizedBox(height: 10),
+                    Text(
+                        'Inflow ${inflow.toStringAsFixed(2)}  •  Outflow ${outflow.toStringAsFixed(2)}')
+                  ]))),
+          const SizedBox(height: 12),
+          Row(children: [
+            for (final metric in [
+              ('INFLOW', inflow, Colors.teal),
+              ('OUTFLOW', outflow, Colors.red),
+              (
+                'NET',
+                inflow - outflow,
+                inflow >= outflow ? Colors.teal : Colors.red
+              )
+            ])
+              Expanded(
+                  child: Card(
+                      child: Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: Column(children: [
+                            Text(metric.$1,
+                                style: const TextStyle(fontSize: 10)),
+                            const SizedBox(height: 6),
+                            Text(metric.$2.toStringAsFixed(0),
+                                style: TextStyle(
+                                    color: metric.$3,
+                                    fontWeight: FontWeight.bold))
+                          ]))))
+          ]),
+          const SizedBox(height: 16),
+          Text('Category outflow for $selectedMonth',
+              style: Theme.of(context).textTheme.titleMedium),
+          ...sortedCategories.map((entry) => Card(
+              child: ListTile(
+                  title: Text(entry.key),
+                  trailing: Text(entry.value.toStringAsFixed(2),
+                      style: const TextStyle(fontWeight: FontWeight.bold)))))
         ]));
   }
 }
