@@ -27,7 +27,7 @@ create or replace function public.rotate_shortcut_ingest_key(
 ) returns text
 language plpgsql security definer set search_path = public
 as $$
-declare v_key text := encode(gen_random_bytes(32), 'hex'); v_user uuid;
+declare v_key text := replace(gen_random_uuid()::text, '-', ''); v_user uuid;
 begin
   select id into v_user from auth.users where email = lower(trim(p_email));
   if v_user is null then raise exception 'User not found'; end if;
