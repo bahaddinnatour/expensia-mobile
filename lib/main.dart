@@ -195,6 +195,22 @@ class Tx {
       transferId: x['transferId']);
 }
 
+class _ActivityNotice {
+  const _ActivityNotice(
+      {required this.id,
+      required this.title,
+      required this.message,
+      required this.createdAt,
+      required this.icon,
+      this.transaction,
+      this.portfolio});
+  final String id, title, message;
+  final DateTime createdAt;
+  final IconData icon;
+  final Tx? transaction;
+  final Portfolio? portfolio;
+}
+
 class MonthlyPlan {
   MonthlyPlan(
       {required this.id,
@@ -332,6 +348,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   var locked = false;
   var cloudSynced = false;
   var forceBackup = false;
+  var readActivityIds = <String>{};
   Portfolio get current => portfolios.firstWhere((p) => p.id == selected,
       orElse: () => portfolios.first);
   double total(bool inflow) => current.transactions
@@ -507,6 +524,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         if (!categories.contains(category)) categories.add(category);
       }
       categoryIcons = Map<String, int>.from(d['categoryIcons'] ?? {});
+      readActivityIds = Set<String>.from(d['readActivityIds'] ?? []);
       if (d['portfolios'] is List) {
         portfolios = (d['portfolios'] as List)
             .map((x) => Portfolio.fromJson(x))
@@ -589,7 +607,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           'selectedId': selected,
           'biometricEnabled': biometricEnabled,
           'globalCategoryCaps': globalCategoryCaps,
-          'capsSharedVersion': 2
+          'capsSharedVersion': 2,
+          'readActivityIds': readActivityIds.toList()
         }
       },
       {
@@ -666,6 +685,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       'selectedId': selected,
       'portfolios': portfolios.map((p) => p.json()).toList(),
       'monthlyPlans': monthlyPlans.map((p) => p.json()).toList(),
+      'readActivityIds': readActivityIds.toList(),
       'monthlyPlansSeeded': true,
       'monthlyPlanCategoryVersion': 2
     };
@@ -983,6 +1003,140 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     onPressed: () => Navigator.pop(ctx),
                     child: const Text('Close'))
               ]));
+
+  List<_ActivityNotice> get activityNotices {
+    final now = DateTime.now();
+    final notices = <_ActivityNotice>[];
+    for (final portfolio in portfolios) {
+      for (final tx in portfolio.transactions) {
+        notices.add(_ActivityNotice(
+            id: 'transaction:${tx.id}',
+            title: tx.inflow ? 'Inflow added' : 'Outflow added',
+            message:
+                '${tx.description} - ${portfolio.currency.symbol} ${tx.amount.toStringAsFixed(2)}',
+            createdAt: tx.createdAt,
+            icon: tx.inflow
+                ? Icons.add_circle_outline
+                : Icons.remove_circle_outline,
+            transaction: tx,
+            portfolio: portfolio));
+      }
+    }
+    for (final entry in globalCategoryCaps.entries) {
+      final currency = Currency.values.firstWhere(
+          (item) => item.name == entry.key,
+          orElse: () => Currency.sar);
+      for (final cap in entry.value.entries) {
+        if (cap.value <= 0) continue;
+        final spent = portfolios
+            .where((portfolio) => portfolio.currency == currency)
+            .expand((portfolio) => portfolio.transactions)
+            .where((tx) =>
+                !tx.inflow &&
+                tx.category == cap.key &&
+                tx.createdAt.year == now.year &&
+                tx.createdAt.month == now.month)
+            .fold<double>(0, (sum, tx) => sum + tx.amount);
+        final ratio = spent / cap.value;
+        if (ratio < .9) continue;
+        notices.add(_ActivityNotice(
+            id: 'cap:${currency.name}:${cap.key}:${now.year}-${now.month}',
+            title: ratio >= 1 ? 'Monthly cap exceeded' : 'Monthly cap warning',
+            message:
+                '${cap.key}: ${(ratio * 100).toStringAsFixed(0)}% of ${currency.symbol} ${cap.value.toStringAsFixed(2)}',
+            createdAt: now,
+            icon:
+                ratio >= 1 ? Icons.warning_amber_rounded : Icons.info_outline));
+      }
+    }
+    notices.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return notices.take(12).toList();
+  }
+
+  Future<void> markActivityRead(Iterable<_ActivityNotice> notices) async {
+    final ids = notices.map((notice) => notice.id).toSet();
+    if (ids.every(readActivityIds.contains)) return;
+    setState(() {
+      readActivityIds.addAll(ids);
+      if (readActivityIds.length > 200) {
+        readActivityIds = readActivityIds.toList().sublist(0, 200).toSet();
+      }
+    });
+    await save();
+  }
+
+  Widget activityBell(List<_ActivityNotice> notices) {
+    final unread =
+        notices.where((notice) => !readActivityIds.contains(notice.id)).length;
+    return PopupMenuButton<_ActivityNotice>(
+        tooltip: unread == 0 ? 'Notifications' : '$unread unread notifications',
+        onOpened: () => markActivityRead(notices),
+        onSelected: (notice) {
+          if (notice.transaction != null) {
+            showDetails(notice.transaction!, notice.portfolio);
+          }
+        },
+        itemBuilder: (context) => [
+              PopupMenuItem<_ActivityNotice>(
+                  enabled: false,
+                  child: Row(children: [
+                    const Icon(Icons.notifications_outlined),
+                    const SizedBox(width: 8),
+                    const Text('Notifications',
+                        style: TextStyle(fontWeight: FontWeight.bold))
+                  ])),
+              const PopupMenuDivider(),
+              if (notices.isEmpty)
+                const PopupMenuItem<_ActivityNotice>(
+                    enabled: false, child: Text('No recent activity')),
+              ...notices.take(6).map((notice) => PopupMenuItem<_ActivityNotice>(
+                  value: notice,
+                  child: SizedBox(
+                      width: 250,
+                      child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(notice.icon,
+                                size: 20,
+                                color: notice.title.contains('exceeded')
+                                    ? Colors.red
+                                    : Colors.teal),
+                            const SizedBox(width: 10),
+                            Expanded(
+                                child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                  Text(notice.title,
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w600)),
+                                  Text(notice.message,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 12))
+                                ]))
+                          ]))))
+            ],
+        child: Stack(clipBehavior: Clip.none, children: [
+          const Padding(
+              padding: EdgeInsets.all(8),
+              child: Icon(Icons.notifications_outlined)),
+          if (unread > 0)
+            Positioned(
+                right: 2,
+                top: 2,
+                child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                        color: Colors.red,
+                        borderRadius: BorderRadius.circular(10)),
+                    child: Text(unread > 9 ? '9+' : '$unread',
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 10))))
+        ]));
+  }
+
   Future<void> openDashboard() => Navigator.push<void>(
       context,
       MaterialPageRoute(
@@ -1160,6 +1314,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         .toList()
       ..sort(
           (a, b) => b.transaction.createdAt.compareTo(a.transaction.createdAt));
+    final notices = activityNotices;
     return Scaffold(
         appBar: AppBar(
             title: Text(profileName.isEmpty
@@ -1179,6 +1334,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   onPressed: connectCloud,
                   icon: Icon(signedIn ? Icons.cloud_done : Icons.cloud_outlined,
                       color: signedIn ? Colors.blue.shade700 : null)),
+              activityBell(notices),
               IconButton(
                   tooltip: 'Bill calendar',
                   onPressed: openBillCalendar,
