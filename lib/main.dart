@@ -172,12 +172,13 @@ class Tx {
       required this.amount,
       required this.inflow,
       required this.createdAt,
-      this.transferId});
+      this.transferId,
+      this.loanId});
   final String id, description, category;
   final double amount;
   final bool inflow;
   final DateTime createdAt;
-  final String? transferId;
+  final String? transferId, loanId;
   Map<String, dynamic> json() => {
         'id': id,
         'description': description,
@@ -185,7 +186,8 @@ class Tx {
         'amount': amount,
         'inflow': inflow,
         'createdAt': createdAt.toIso8601String(),
-        'transferId': transferId
+        'transferId': transferId,
+        'loanId': loanId
       };
   factory Tx.fromJson(Map<String, dynamic> x) => Tx(
       id: x['id'],
@@ -194,7 +196,36 @@ class Tx {
       amount: (x['amount'] as num).toDouble(),
       inflow: x['inflow'],
       createdAt: DateTime.parse(x['createdAt']),
-      transferId: x['transferId']);
+      transferId: x['transferId'],
+      loanId: x['loanId']);
+}
+
+class Loan {
+  const Loan(
+      {required this.id,
+      required this.name,
+      required this.lender,
+      required this.principal,
+      required this.termMonths,
+      required this.portfolioId});
+  final String id, name, lender, portfolioId;
+  final double principal;
+  final int termMonths;
+  Map<String, dynamic> json() => {
+        'id': id,
+        'name': name,
+        'lender': lender,
+        'principal': principal,
+        'termMonths': termMonths,
+        'portfolioId': portfolioId
+      };
+  factory Loan.fromJson(Map<String, dynamic> x) => Loan(
+      id: x['id'],
+      name: x['name'],
+      lender: x['lender'] ?? '',
+      principal: (x['principal'] as num).toDouble(),
+      termMonths: (x['termMonths'] as num? ?? 1).toInt(),
+      portfolioId: x['portfolioId']);
 }
 
 class _ActivityNotice {
@@ -226,6 +257,7 @@ class MonthlyPlan {
       this.recurring = true,
       this.frequency = PlanFrequency.monthly,
       this.anchorMonth = 1,
+      this.loanId,
       this.lastCreatedMonth,
       this.lastSkippedMonth});
   final String id, description, category, portfolioId;
@@ -234,7 +266,10 @@ class MonthlyPlan {
   final bool savingsTransfer, recurring;
   final PlanFrequency frequency;
   final int anchorMonth;
-  final String? destinationPortfolioId, lastCreatedMonth, lastSkippedMonth;
+  final String? destinationPortfolioId,
+      loanId,
+      lastCreatedMonth,
+      lastSkippedMonth;
   Map<String, dynamic> json() => {
         'id': id,
         'description': description,
@@ -247,6 +282,7 @@ class MonthlyPlan {
         'recurring': recurring,
         'frequency': frequency.name,
         'anchorMonth': anchorMonth,
+        'loanId': loanId,
         'lastCreatedMonth': lastCreatedMonth,
         'lastSkippedMonth': lastSkippedMonth
       };
@@ -264,6 +300,7 @@ class MonthlyPlan {
           (value) => value.name == x['frequency'],
           orElse: () => PlanFrequency.monthly),
       anchorMonth: (x['anchorMonth'] as num? ?? 1).toInt().clamp(1, 12).toInt(),
+      loanId: x['loanId'],
       lastCreatedMonth: x['lastCreatedMonth'],
       lastSkippedMonth: x['lastSkippedMonth']);
 }
@@ -407,6 +444,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   var showGlobalTransactions = false;
   var showGlobalReport = true;
   var monthlyPlans = <MonthlyPlan>[];
+  var loans = <Loan>[];
   var selected = '';
   var profileName = '';
   var email = '';
@@ -536,6 +574,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           recurring: plan.recurring,
           frequency: plan.frequency,
           anchorMonth: plan.anchorMonth,
+          loanId: plan.loanId,
           lastCreatedMonth: plan.lastCreatedMonth,
           lastSkippedMonth: plan.lastSkippedMonth);
     }).toList();
@@ -567,6 +606,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           recurring: plan.recurring,
           frequency: plan.frequency,
           anchorMonth: plan.anchorMonth,
+          loanId: plan.loanId,
           lastCreatedMonth: plan.lastCreatedMonth,
           lastSkippedMonth: plan.lastSkippedMonth);
     }).toList();
@@ -635,6 +675,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       monthlyPlans = (d['monthlyPlans'] as List? ?? [])
           .map((x) => MonthlyPlan.fromJson(x))
           .toList();
+      loans = (d['loans'] as List? ?? []).map((x) => Loan.fromJson(x)).toList();
       // Older snapshots do not have this marker, but may already contain
       // user-managed plans. Seed only an actually empty plan list.
       needsStarterPlans =
@@ -718,6 +759,14 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         'payload': plan.json()
       });
     }
+    for (final loan in loans) {
+      records.add({
+        'user_id': user.id,
+        'record_type': 'loan',
+        'record_id': loan.id,
+        'payload': loan.json()
+      });
+    }
     await _cloud.from('finance_records').upsert(records);
   }
 
@@ -759,6 +808,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       'selectedId': selected,
       'portfolios': portfolios.map((p) => p.json()).toList(),
       'monthlyPlans': monthlyPlans.map((p) => p.json()).toList(),
+      'loans': loans.map((loan) => loan.json()).toList(),
       'readActivityIds': readActivityIds.toList(),
       'monthlyPlansSeeded': true,
       'monthlyPlanCategoryVersion': 2
@@ -1337,6 +1387,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         categories = data.categories;
         categoryIcons = data.categoryIcons;
         monthlyPlans = data.monthlyPlans;
+        loans = data.loans;
         biometricEnabled = data.biometricEnabled;
       });
       await save();
@@ -1354,6 +1405,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     categories: categories,
                     categoryIcons: categoryIcons,
                     monthlyPlans: monthlyPlans,
+                    loans: loans,
                     globalCategoryCaps: globalCategoryCaps,
                     biometricEnabled: biometricEnabled),
                 cloudSignedIn: _cloud.auth.currentUser != null,
@@ -1383,7 +1435,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               amount: plan.amount,
               inflow: false,
               createdAt: now,
-              transferId: plan.savingsTransfer ? transferId : null));
+              transferId: plan.savingsTransfer ? transferId : null,
+              loanId: plan.loanId));
       if (plan.savingsTransfer &&
           plan.destinationPortfolioId != null &&
           plan.destinationPortfolioId != source.id) {
@@ -1415,6 +1468,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             recurring: plan.recurring,
             frequency: plan.frequency,
             anchorMonth: plan.anchorMonth,
+            loanId: plan.loanId,
             lastCreatedMonth: month,
             lastSkippedMonth: null);
     });
@@ -1439,6 +1493,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           recurring: plan.recurring,
           frequency: plan.frequency,
           anchorMonth: plan.anchorMonth,
+          loanId: plan.loanId,
           lastCreatedMonth: null,
           lastSkippedMonth: month);
     });
@@ -1450,6 +1505,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       MaterialPageRoute(
           builder: (_) => PlanTransactionsPage(
               plans: monthlyPlans,
+              loans: loans,
               portfolios: portfolios,
               icons: categoryIcons,
               onCreate: createPlanTransaction,
@@ -2231,6 +2287,7 @@ class _SettingsData {
       required this.categories,
       required this.categoryIcons,
       required this.monthlyPlans,
+      required this.loans,
       required this.globalCategoryCaps,
       required this.biometricEnabled});
   final List<Portfolio> portfolios;
@@ -2238,6 +2295,7 @@ class _SettingsData {
   final List<String> categories;
   final Map<String, int> categoryIcons;
   final List<MonthlyPlan> monthlyPlans;
+  final List<Loan> loans;
   final Map<String, Map<String, double>> globalCategoryCaps;
   final bool biometricEnabled;
 }
@@ -2266,6 +2324,7 @@ class _SettingsState extends State<Settings> {
   late List<String> categories;
   late Map<String, int> categoryIcons;
   late List<MonthlyPlan> monthlyPlans;
+  late List<Loan> loans;
   late Map<String, Map<String, double>> globalCategoryCaps;
   late bool biometricEnabled;
   var backupsOpen = false;
@@ -2288,6 +2347,7 @@ class _SettingsState extends State<Settings> {
     categories = [...widget.data.categories];
     categoryIcons = {...widget.data.categoryIcons};
     monthlyPlans = [...widget.data.monthlyPlans];
+    loans = [...widget.data.loans];
     globalCategoryCaps = widget.data.globalCategoryCaps
         .map((currency, caps) => MapEntry(currency, {...caps}));
     biometricEnabled = widget.data.biometricEnabled;
@@ -2599,7 +2659,8 @@ class _SettingsState extends State<Settings> {
                   destinationPortfolioId: plan.destinationPortfolioId,
                   recurring: plan.recurring,
                   frequency: plan.frequency,
-                  anchorMonth: plan.anchorMonth))
+                  anchorMonth: plan.anchorMonth,
+                  loanId: plan.loanId))
           .toList();
     });
     await widget.onSave(_SettingsData(
@@ -2610,6 +2671,7 @@ class _SettingsState extends State<Settings> {
         categories: categories,
         categoryIcons: categoryIcons,
         monthlyPlans: monthlyPlans,
+        loans: loans,
         globalCategoryCaps: globalCategoryCaps,
         biometricEnabled: biometricEnabled));
     if (mounted) {
@@ -2664,6 +2726,7 @@ class _SettingsState extends State<Settings> {
         categories: categories,
         categoryIcons: categoryIcons,
         monthlyPlans: monthlyPlans,
+        loans: loans,
         globalCategoryCaps: globalCategoryCaps,
         biometricEnabled: biometricEnabled));
     await archiveSharedRecords('portfolio', [portfolio.id]);
@@ -2770,6 +2833,7 @@ class _SettingsState extends State<Settings> {
         MaterialPageRoute(
             builder: (_) => MonthlyPlansPage(
                 plans: monthlyPlans,
+                loans: loans,
                 portfolios: portfolios,
                 categories: categories,
                 icons: categoryIcons)));
@@ -2777,6 +2841,17 @@ class _SettingsState extends State<Settings> {
     final remainingPlanIds = monthlyPlans.map((plan) => plan.id).toSet();
     await archiveSharedRecords(
         'plan', initialPlanIds.difference(remainingPlanIds).toList());
+  }
+
+  Future<void> openLoans() async {
+    final initialIds = loans.map((loan) => loan.id).toSet();
+    await Navigator.push<void>(
+        context,
+        MaterialPageRoute(
+            builder: (_) => LoansPage(loans: loans, portfolios: portfolios)));
+    setState(() {});
+    await archiveSharedRecords('loan',
+        initialIds.difference(loans.map((loan) => loan.id).toSet()).toList());
   }
 
   Future<void> openCaps() async {
@@ -2802,6 +2877,7 @@ class _SettingsState extends State<Settings> {
           categories: categories,
           categoryIcons: categoryIcons,
           monthlyPlans: monthlyPlans,
+          loans: loans,
           globalCategoryCaps: globalCategoryCaps,
           biometricEnabled: biometricEnabled));
   @override
@@ -2920,6 +2996,14 @@ class _SettingsState extends State<Settings> {
                 icon: const Icon(Icons.add),
                 label: const Text('Add portfolio')),
             const SizedBox(height: 20),
+            ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.account_balance_outlined),
+                title: const Text('Loans'),
+                subtitle: Text(
+                    '${loans.length} loan${loans.length == 1 ? '' : 's'} with payment tracking'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: openLoans),
             ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.receipt_long_outlined),
@@ -3142,7 +3226,8 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
               destinationPortfolioId: plan.destinationPortfolioId,
               recurring: plan.recurring,
               frequency: plan.frequency,
-              anchorMonth: plan.anchorMonth);
+              anchorMonth: plan.anchorMonth,
+              loanId: plan.loanId);
         }
       }
     });
@@ -3223,11 +3308,13 @@ class PlanTransactionsPage extends StatefulWidget {
   const PlanTransactionsPage(
       {super.key,
       required this.plans,
+      required this.loans,
       required this.portfolios,
       required this.icons,
       required this.onCreate,
       required this.onSkip});
   final List<MonthlyPlan> plans;
+  final List<Loan> loans;
   final List<Portfolio> portfolios;
   final Map<String, int> icons;
   final void Function(MonthlyPlan) onCreate;
@@ -3467,14 +3554,151 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
   }
 }
 
+class LoansPage extends StatefulWidget {
+  const LoansPage({super.key, required this.loans, required this.portfolios});
+  final List<Loan> loans;
+  final List<Portfolio> portfolios;
+  @override
+  State<LoansPage> createState() => _LoansPageState();
+}
+
+class _LoansPageState extends State<LoansPage> {
+  double paid(Loan loan) => widget.portfolios
+      .expand((portfolio) => portfolio.transactions)
+      .where((tx) => !tx.inflow && tx.loanId == loan.id)
+      .fold(0, (sum, tx) => sum + tx.amount);
+
+  Future<void> edit([Loan? existing]) async {
+    final name = TextEditingController(text: existing?.name ?? '');
+    final lender = TextEditingController(text: existing?.lender ?? '');
+    final principal = TextEditingController(
+        text: existing?.principal.toStringAsFixed(2) ?? '');
+    final months =
+        TextEditingController(text: existing?.termMonths.toString() ?? '12');
+    var portfolioId = existing?.portfolioId ?? widget.portfolios.first.id;
+    final loan = await showDialog<Loan>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, setDialog) => AlertDialog(
+                    title: Text(existing == null ? 'Add loan' : 'Edit loan'),
+                    content: SingleChildScrollView(
+                        child:
+                            Column(mainAxisSize: MainAxisSize.min, children: [
+                      TextField(
+                          controller: name,
+                          decoration:
+                              const InputDecoration(labelText: 'Loan name')),
+                      TextField(
+                          controller: lender,
+                          decoration:
+                              const InputDecoration(labelText: 'Lender')),
+                      TextField(
+                          controller: principal,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          decoration: const InputDecoration(
+                              labelText: 'Original loan amount')),
+                      TextField(
+                          controller: months,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                              labelText: 'Loan duration in months')),
+                      DropdownButtonFormField<String>(
+                          initialValue: portfolioId,
+                          decoration: const InputDecoration(
+                              labelText: 'Payment portfolio'),
+                          items: widget.portfolios
+                              .map((portfolio) => DropdownMenuItem(
+                                  value: portfolio.id,
+                                  child: Text(portfolio.name)))
+                              .toList(),
+                          onChanged: (value) =>
+                              setDialog(() => portfolioId = value!)),
+                    ])),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: () {
+                            final amount = double.tryParse(
+                                    principal.text.replaceAll(',', '')) ??
+                                0;
+                            final term = int.tryParse(months.text) ?? 0;
+                            if (name.text.trim().isNotEmpty &&
+                                amount > 0 &&
+                                term > 0)
+                              Navigator.pop(
+                                  ctx,
+                                  Loan(
+                                      id: existing?.id ??
+                                          DateTime.now()
+                                              .microsecondsSinceEpoch
+                                              .toString(),
+                                      name: name.text.trim(),
+                                      lender: lender.text.trim(),
+                                      principal: amount,
+                                      termMonths: term,
+                                      portfolioId: portfolioId));
+                          },
+                          child: const Text('Save'))
+                    ])));
+    if (loan != null)
+      setState(() {
+        final index = widget.loans.indexWhere((item) => item.id == loan.id);
+        if (index < 0)
+          widget.loans.add(loan);
+        else
+          widget.loans[index] = loan;
+      });
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+      appBar: AppBar(title: const Text('Loans')),
+      body: widget.loans.isEmpty
+          ? const Center(
+              child: Text(
+                  'No loans yet. Add a loan, then link it to a recurring plan.'))
+          : ListView(
+              padding: const EdgeInsets.all(20),
+              children: widget.loans.map((loan) {
+                final totalPaid = paid(loan);
+                final remaining =
+                    (loan.principal - totalPaid).clamp(0, double.infinity);
+                final portfolio = widget.portfolios.firstWhere(
+                    (item) => item.id == loan.portfolioId,
+                    orElse: () => widget.portfolios.first);
+                return Card(
+                    child: ListTile(
+                        onTap: () => edit(loan),
+                        leading: const CircleAvatar(
+                            child: Icon(Icons.account_balance_outlined)),
+                        title: Text(loan.name),
+                        subtitle: Text(
+                            '${loan.lender.isEmpty ? 'Loan' : loan.lender} - ${loan.termMonths} months\nPaid ${portfolio.currency.symbol} ${totalPaid.toStringAsFixed(2)} | Remaining ${portfolio.currency.symbol} ${remaining.toStringAsFixed(2)}'),
+                        isThreeLine: true,
+                        trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () =>
+                                setState(() => widget.loans.remove(loan)))));
+              }).toList()),
+      floatingActionButton: FloatingActionButton.extended(
+          onPressed: () => edit(),
+          icon: const Icon(Icons.add),
+          label: const Text('Add loan')));
+}
+
 class MonthlyPlansPage extends StatefulWidget {
   const MonthlyPlansPage(
       {super.key,
       required this.plans,
+      required this.loans,
       required this.portfolios,
       required this.categories,
       required this.icons});
   final List<MonthlyPlan> plans;
+  final List<Loan> loans;
   final List<Portfolio> portfolios;
   final List<String> categories;
   final Map<String, int> icons;
@@ -3527,6 +3751,7 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
     var recurring = existing?.recurring ?? true;
     var frequency = existing?.frequency ?? PlanFrequency.monthly;
     var anchorMonth = existing?.anchorMonth ?? DateTime.now().month;
+    var loanId = existing?.loanId;
     final saved = await showDialog<MonthlyPlan>(
         context: context,
         builder: (ctx) => StatefulBuilder(
@@ -3608,6 +3833,22 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
                             onChanged: (value) =>
                                 setDialog(() => anchorMonth = value!)),
                       ],
+                      if (widget.loans.isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        DropdownButtonFormField<String?>(
+                            initialValue: loanId,
+                            decoration: const InputDecoration(
+                                labelText: 'Linked loan (optional)'),
+                            items: [
+                              const DropdownMenuItem<String?>(
+                                  value: null, child: Text('No linked loan')),
+                              ...widget.loans.map((loan) =>
+                                  DropdownMenuItem<String?>(
+                                      value: loan.id, child: Text(loan.name)))
+                            ],
+                            onChanged: (value) =>
+                                setDialog(() => loanId = value)),
+                      ],
                       SwitchListTile(
                           contentPadding: EdgeInsets.zero,
                           title: const Text('Savings transfer'),
@@ -3662,6 +3903,7 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
                                       recurring: recurring,
                                       frequency: frequency,
                                       anchorMonth: anchorMonth,
+                                      loanId: loanId,
                                       lastCreatedMonth:
                                           existing?.lastCreatedMonth,
                                       lastSkippedMonth:
