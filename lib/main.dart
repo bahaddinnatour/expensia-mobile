@@ -292,6 +292,14 @@ String _planPeriodKey(MonthlyPlan plan, DateTime date) {
   return '${date.year}-${date.month.toString().padLeft(2, '0')}';
 }
 
+int _comparePlans(MonthlyPlan a, MonthlyPlan b) {
+  final frequency = a.frequency.index.compareTo(b.frequency.index);
+  if (frequency != 0) return frequency;
+  final dueDay = a.dueDay.compareTo(b.dueDay);
+  if (dueDay != 0) return dueDay;
+  return a.description.toLowerCase().compareTo(b.description.toLowerCase());
+}
+
 enum PortfolioType { bank, creditCard }
 
 const _portfolioIcons = <String, IconData>{
@@ -3279,8 +3287,7 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final ordered = [...widget.plans]
-      ..sort((a, b) => a.dueDay.compareTo(b.dueDay));
+    final ordered = [...widget.plans]..sort(_comparePlans);
     final now = DateTime.now();
     final firstDay = DateTime(now.year, now.month, 1);
     final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
@@ -3675,8 +3682,7 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
 
   @override
   Widget build(BuildContext context) {
-    final plans = [...widget.plans]
-      ..sort((a, b) => a.dueDay.compareTo(b.dueDay));
+    final plans = [...widget.plans]..sort(_comparePlans);
     return Scaffold(
         appBar: AppBar(title: const Text('Recurring plans'), actions: [
           IconButton(
