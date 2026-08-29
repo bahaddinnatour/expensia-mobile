@@ -303,9 +303,11 @@ class Portfolio {
       opening +
       transactions.fold(0, (sum, t) => sum + (t.inflow ? t.amount : -t.amount));
   bool get isCreditCard => type == PortfolioType.creditCard;
-  double get outstanding => isCreditCard ? -balance : 0;
-  double get availableCredit =>
-      (creditLimit - outstanding).clamp(0, creditLimit).toDouble();
+  double get outstanding =>
+      isCreditCard ? (-balance).clamp(0, double.infinity).toDouble() : 0;
+  double get availableCredit => isCreditCard
+      ? (creditLimit + balance).clamp(0, double.infinity).toDouble()
+      : 0;
   double get utilization => creditLimit <= 0 ? 0 : outstanding / creditLimit;
   Map<String, dynamic> json() => {
         'id': id,
@@ -2441,6 +2443,54 @@ class _SettingsState extends State<Settings> {
     }
   }
 
+  Future<void> setCurrentAmount(Portfolio portfolio) async {
+    final value = TextEditingController(
+        text: (portfolio.isCreditCard
+                ? portfolio.availableCredit
+                : portfolio.balance)
+            .toStringAsFixed(2));
+    final target = await showDialog<double>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: Text(portfolio.isCreditCard
+                    ? 'Set available credit'
+                    : 'Set current balance'),
+                content: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text(portfolio.isCreditCard
+                      ? 'Credit limit stays ${portfolio.currency.symbol} ${portfolio.creditLimit.toStringAsFixed(2)}. This adjusts the opening balance while keeping transaction history.'
+                      : 'This adjusts the opening balance while keeping transaction history.'),
+                  const SizedBox(height: 12),
+                  TextField(
+                      controller: value,
+                      autofocus: true,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                          labelText: portfolio.isCreditCard
+                              ? 'Available credit'
+                              : 'Current balance',
+                          prefixText: '${portfolio.currency.symbol} '))
+                ]),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(
+                          ctx, double.tryParse(value.text.replaceAll(',', ''))),
+                      child: const Text('Save'))
+                ]));
+    value.dispose();
+    if (target == null || target < 0) return;
+    final transactionNet = portfolio.transactions.fold<double>(
+        0, (sum, tx) => sum + (tx.inflow ? tx.amount : -tx.amount));
+    setState(() {
+      portfolio.opening = portfolio.isCreditCard
+          ? target - portfolio.creditLimit - transactionNet
+          : target - transactionNet;
+    });
+  }
+
   Future<void> resetPortfolio(Portfolio portfolio) async {
     final confirmed = await showDialog<bool>(
         context: context,
@@ -2785,6 +2835,12 @@ class _SettingsState extends State<Settings> {
                       tooltip: 'Rename portfolio',
                       onPressed: () => renamePortfolio(p),
                       icon: const Icon(Icons.edit_outlined)),
+                  IconButton(
+                      tooltip: p.isCreditCard
+                          ? 'Set available credit'
+                          : 'Set current balance',
+                      onPressed: () => setCurrentAmount(p),
+                      icon: const Icon(Icons.tune_outlined)),
                   IconButton(
                       tooltip: 'Reset portfolio data',
                       onPressed: () => resetPortfolio(p),
