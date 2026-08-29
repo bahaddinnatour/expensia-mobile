@@ -1666,11 +1666,24 @@ class DashboardPage extends StatelessWidget {
                         children: [
                           Row(children: [
                             Expanded(
-                                child: Text(portfolio.name.toUpperCase(),
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleLarge)),
-                            Text(portfolio.currency.name.toUpperCase(),
+                                child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                  Text(portfolio.currency.name.toUpperCase(),
+                                      style: const TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.blueGrey)),
+                                  Text(portfolio.name.toUpperCase(),
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleLarge)
+                                ])),
+                            Text(
+                                portfolio.isCreditCard
+                                    ? 'CREDIT CARD'
+                                    : 'BANK / CASH',
                                 style: const TextStyle(color: Colors.blueGrey))
                           ]),
                           const SizedBox(height: 12),
