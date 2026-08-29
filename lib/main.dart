@@ -118,7 +118,8 @@ class PlanReminderService {
     for (var offset = 0; offset < 3; offset++) {
       final month = DateTime(now.year, now.month + offset);
       final lastDay = DateTime(month.year, month.month + 1, 0).day;
-      for (final plan in plans.where((plan) => plan.recurring)) {
+      for (final plan in plans
+          .where((plan) => plan.recurring && _planOccursInMonth(plan, month))) {
         final dueDay = plan.dueDay.clamp(1, lastDay).toInt();
         final due = tz.TZDateTime(tz.local, month.year, month.month, dueDay, 9);
         final reminderDates = [due.subtract(const Duration(days: 1)), due];
@@ -147,8 +148,8 @@ class PlanReminderService {
 
 bool _planCreatedInMonth(
     MonthlyPlan plan, List<Portfolio> portfolios, DateTime date) {
-  final month = '${date.year}-${date.month.toString().padLeft(2, '0')}';
-  if (plan.lastCreatedMonth == month || plan.lastSkippedMonth == month) {
+  final period = _planPeriodKey(plan, date);
+  if (plan.lastCreatedMonth == period || plan.lastSkippedMonth == period) {
     return true;
   }
   final matches = portfolios.where((item) => item.id == plan.portfolioId);
@@ -159,7 +160,8 @@ bool _planCreatedInMonth(
       tx.description == plan.description &&
       tx.amount == plan.amount &&
       tx.createdAt.year == date.year &&
-      tx.createdAt.month == date.month);
+      tx.createdAt.month == date.month &&
+      _planOccursInMonth(plan, date));
 }
 
 class Tx {
@@ -222,12 +224,16 @@ class MonthlyPlan {
       this.savingsTransfer = false,
       this.destinationPortfolioId,
       this.recurring = true,
+      this.frequency = PlanFrequency.monthly,
+      this.anchorMonth = 1,
       this.lastCreatedMonth,
       this.lastSkippedMonth});
   final String id, description, category, portfolioId;
   final double amount;
   final int dueDay;
   final bool savingsTransfer, recurring;
+  final PlanFrequency frequency;
+  final int anchorMonth;
   final String? destinationPortfolioId, lastCreatedMonth, lastSkippedMonth;
   Map<String, dynamic> json() => {
         'id': id,
@@ -239,6 +245,8 @@ class MonthlyPlan {
         'savingsTransfer': savingsTransfer,
         'destinationPortfolioId': destinationPortfolioId,
         'recurring': recurring,
+        'frequency': frequency.name,
+        'anchorMonth': anchorMonth,
         'lastCreatedMonth': lastCreatedMonth,
         'lastSkippedMonth': lastSkippedMonth
       };
@@ -252,8 +260,36 @@ class MonthlyPlan {
       savingsTransfer: x['savingsTransfer'] ?? false,
       destinationPortfolioId: x['destinationPortfolioId'],
       recurring: x['recurring'] ?? true,
+      frequency: PlanFrequency.values.firstWhere(
+          (value) => value.name == x['frequency'],
+          orElse: () => PlanFrequency.monthly),
+      anchorMonth: (x['anchorMonth'] as num? ?? 1).toInt().clamp(1, 12).toInt(),
       lastCreatedMonth: x['lastCreatedMonth'],
       lastSkippedMonth: x['lastSkippedMonth']);
+}
+
+enum PlanFrequency { monthly, semiAnnual, annual }
+
+String _planFrequencyLabel(PlanFrequency frequency) => switch (frequency) {
+      PlanFrequency.monthly => 'Monthly',
+      PlanFrequency.semiAnnual => 'Every 6 months',
+      PlanFrequency.annual => 'Annual',
+    };
+
+bool _planOccursInMonth(MonthlyPlan plan, DateTime date) {
+  switch (plan.frequency) {
+    case PlanFrequency.monthly:
+      return true;
+    case PlanFrequency.semiAnnual:
+      return (date.month - plan.anchorMonth).remainder(6) == 0;
+    case PlanFrequency.annual:
+      return date.month == plan.anchorMonth;
+  }
+}
+
+String _planPeriodKey(MonthlyPlan plan, DateTime date) {
+  if (plan.frequency == PlanFrequency.annual) return '${date.year}';
+  return '${date.year}-${date.month.toString().padLeft(2, '0')}';
 }
 
 enum PortfolioType { bank, creditCard }
@@ -459,7 +495,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       final key =
           '${plan.portfolioId}|${plan.description.trim().toLowerCase()}|'
           '${plan.category}|${plan.amount.toStringAsFixed(2)}|${plan.dueDay}|'
-          '${plan.savingsTransfer}|${plan.destinationPortfolioId ?? ''}';
+          '${plan.savingsTransfer}|${plan.destinationPortfolioId ?? ''}|'
+          '${plan.frequency.name}|${plan.anchorMonth}';
       if (seen.add(key)) unique.add(plan);
     }
     if (unique.length == monthlyPlans.length) return false;
@@ -489,6 +526,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           savingsTransfer: plan.savingsTransfer,
           destinationPortfolioId: plan.destinationPortfolioId,
           recurring: plan.recurring,
+          frequency: plan.frequency,
+          anchorMonth: plan.anchorMonth,
           lastCreatedMonth: plan.lastCreatedMonth,
           lastSkippedMonth: plan.lastSkippedMonth);
     }).toList();
@@ -518,6 +557,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           savingsTransfer: plan.savingsTransfer,
           destinationPortfolioId: destination,
           recurring: plan.recurring,
+          frequency: plan.frequency,
+          anchorMonth: plan.anchorMonth,
           lastCreatedMonth: plan.lastCreatedMonth,
           lastSkippedMonth: plan.lastSkippedMonth);
     }).toList();
@@ -1321,7 +1362,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         orElse: () => portfolios.firstWhere((item) => item.id == selected,
             orElse: () => portfolios.first));
     final now = DateTime.now();
-    final month = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+    final month = _planPeriodKey(plan, now);
     final transferId = 'transfer_${now.microsecondsSinceEpoch}';
     if (plan.lastCreatedMonth == month) return;
     setState(() {
@@ -1364,6 +1405,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             savingsTransfer: plan.savingsTransfer,
             destinationPortfolioId: plan.destinationPortfolioId,
             recurring: plan.recurring,
+            frequency: plan.frequency,
+            anchorMonth: plan.anchorMonth,
             lastCreatedMonth: month,
             lastSkippedMonth: null);
     });
@@ -1372,7 +1415,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
   void skipPlanTransaction(MonthlyPlan plan) {
     final now = DateTime.now();
-    final month = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+    final month = _planPeriodKey(plan, now);
     setState(() {
       final index = monthlyPlans.indexWhere((item) => item.id == plan.id);
       if (index < 0) return;
@@ -1386,6 +1429,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           savingsTransfer: plan.savingsTransfer,
           destinationPortfolioId: plan.destinationPortfolioId,
           recurring: plan.recurring,
+          frequency: plan.frequency,
+          anchorMonth: plan.anchorMonth,
           lastCreatedMonth: null,
           lastSkippedMonth: month);
     });
@@ -2544,7 +2589,9 @@ class _SettingsState extends State<Settings> {
                   portfolioId: plan.portfolioId,
                   savingsTransfer: plan.savingsTransfer,
                   destinationPortfolioId: plan.destinationPortfolioId,
-                  recurring: plan.recurring))
+                  recurring: plan.recurring,
+                  frequency: plan.frequency,
+                  anchorMonth: plan.anchorMonth))
           .toList();
     });
     await widget.onSave(_SettingsData(
@@ -3085,7 +3132,9 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
               portfolioId: plan.portfolioId,
               savingsTransfer: plan.savingsTransfer,
               destinationPortfolioId: plan.destinationPortfolioId,
-              recurring: plan.recurring);
+              recurring: plan.recurring,
+              frequency: plan.frequency,
+              anchorMonth: plan.anchorMonth);
         }
       }
     });
@@ -3184,7 +3233,8 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
       widget.portfolios.firstWhere((item) => item.id == id,
           orElse: () => widget.portfolios.first);
   bool createdThisMonth(MonthlyPlan plan, DateTime now) {
-    final month = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+    if (!_planOccursInMonth(plan, now)) return true;
+    final month = _planPeriodKey(plan, now);
     final source = portfolio(plan.portfolioId);
     return plan.lastCreatedMonth == month ||
         plan.lastSkippedMonth == month ||
@@ -3238,7 +3288,7 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('Bill calendar')),
       body: ordered.isEmpty
-          ? const Center(child: Text('No monthly plans yet.'))
+          ? const Center(child: Text('No recurring plans yet.'))
           : ListView(
               padding: const EdgeInsets.all(20),
               children: [
@@ -3284,7 +3334,9 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                                       return const SizedBox.shrink();
                                     }
                                     final plans = ordered
-                                        .where((plan) => plan.dueDay == day)
+                                        .where((plan) =>
+                                            plan.dueDay == day &&
+                                            _planOccursInMonth(plan, now))
                                         .toList();
                                     final pending = plans
                                         .where((plan) =>
@@ -3346,8 +3398,8 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                       ? null
                       : portfolio(plan.destinationPortfolioId!);
                   final isCreated = createdThisMonth(plan, now);
-                  final isSkipped = plan.lastSkippedMonth ==
-                      '${now.year}-${now.month.toString().padLeft(2, '0')}';
+                  final isSkipped =
+                      plan.lastSkippedMonth == _planPeriodKey(plan, now);
                   return Card(
                       child: Padding(
                     padding: const EdgeInsets.all(14),
@@ -3370,7 +3422,7 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                           ]),
                           const SizedBox(height: 8),
                           Text(
-                              '${plan.savingsTransfer ? 'Transfer' : 'Expense'} from ${source.name}${destination == null ? '' : ' to ${destination.name}'} - due day ${plan.dueDay}'),
+                              '${plan.savingsTransfer ? 'Transfer' : 'Expense'} from ${source.name}${destination == null ? '' : ' to ${destination.name}'} - ${_planFrequencyLabel(plan.frequency)} - due day ${plan.dueDay}'),
                           const SizedBox(height: 10),
                           Align(
                               alignment: Alignment.centerRight,
@@ -3380,9 +3432,11 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                                       icon: Icon(isSkipped
                                           ? Icons.skip_next_outlined
                                           : Icons.check),
-                                      label: Text(isSkipped
-                                          ? 'Skipped this month'
-                                          : 'Created this month'))
+                                      label: Text(!_planOccursInMonth(plan, now)
+                                          ? 'Not due this month'
+                                          : isSkipped
+                                              ? 'Skipped this period'
+                                              : 'Created this period'))
                                   : Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
@@ -3432,7 +3486,8 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
       final key =
           '${plan.portfolioId}|${plan.description.trim().toLowerCase()}|'
           '${plan.category}|${plan.amount.toStringAsFixed(2)}|${plan.dueDay}|'
-          '${plan.savingsTransfer}|${plan.destinationPortfolioId ?? ''}';
+          '${plan.savingsTransfer}|${plan.destinationPortfolioId ?? ''}|'
+          '${plan.frequency.name}|${plan.anchorMonth}';
       if (!seen.add(key)) duplicateIds.add(plan.id);
     }
     if (duplicateIds.isEmpty) {
@@ -3463,13 +3518,15 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
                 orElse: () => widget.portfolios.first)
             .id;
     var recurring = existing?.recurring ?? true;
+    var frequency = existing?.frequency ?? PlanFrequency.monthly;
+    var anchorMonth = existing?.anchorMonth ?? DateTime.now().month;
     final saved = await showDialog<MonthlyPlan>(
         context: context,
         builder: (ctx) => StatefulBuilder(
             builder: (ctx, setDialog) => AlertDialog(
                     title: Text(existing == null
-                        ? 'Add monthly plan'
-                        : 'Edit monthly plan'),
+                        ? 'Add recurring plan'
+                        : 'Edit recurring plan'),
                     content: SingleChildScrollView(
                         child:
                             Column(mainAxisSize: MainAxisSize.min, children: [
@@ -3515,6 +3572,35 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
                           keyboardType: TextInputType.number,
                           decoration: const InputDecoration(
                               labelText: 'Due day (1-31)')),
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<PlanFrequency>(
+                          initialValue: frequency,
+                          decoration:
+                              const InputDecoration(labelText: 'Repeats'),
+                          items: PlanFrequency.values
+                              .map((item) => DropdownMenuItem(
+                                  value: item,
+                                  child: Text(_planFrequencyLabel(item))))
+                              .toList(),
+                          onChanged: (value) =>
+                              setDialog(() => frequency = value!)),
+                      if (frequency != PlanFrequency.monthly) ...[
+                        const SizedBox(height: 10),
+                        DropdownButtonFormField<int>(
+                            initialValue: anchorMonth,
+                            decoration: InputDecoration(
+                                labelText: frequency == PlanFrequency.annual
+                                    ? 'Due month'
+                                    : 'First due month'),
+                            items: List.generate(
+                                    12,
+                                    (index) => DropdownMenuItem(
+                                        value: index + 1,
+                                        child: Text(_monthName(index + 1))))
+                                .toList(),
+                            onChanged: (value) =>
+                                setDialog(() => anchorMonth = value!)),
+                      ],
                       SwitchListTile(
                           contentPadding: EdgeInsets.zero,
                           title: const Text('Savings transfer'),
@@ -3567,6 +3653,8 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
                                       destinationPortfolioId:
                                           transfer ? destination : null,
                                       recurring: recurring,
+                                      frequency: frequency,
+                                      anchorMonth: anchorMonth,
                                       lastCreatedMonth:
                                           existing?.lastCreatedMonth,
                                       lastSkippedMonth:
@@ -3590,14 +3678,14 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
     final plans = [...widget.plans]
       ..sort((a, b) => a.dueDay.compareTo(b.dueDay));
     return Scaffold(
-        appBar: AppBar(title: const Text('Monthly plans'), actions: [
+        appBar: AppBar(title: const Text('Recurring plans'), actions: [
           IconButton(
               tooltip: 'Remove duplicate plans',
               onPressed: removeDuplicates,
               icon: const Icon(Icons.content_copy_outlined))
         ]),
         body: plans.isEmpty
-            ? const Center(child: Text('No monthly plans yet.'))
+            ? const Center(child: Text('No recurring plans yet.'))
             : ListView(padding: const EdgeInsets.all(20), children: [
                 Text('Recurring commitments',
                     style: Theme.of(context).textTheme.headlineSmall),
@@ -3620,7 +3708,7 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
                                       plan.category, widget.icons))),
                           title: Text(plan.description),
                           subtitle: Text(
-                              '${plan.savingsTransfer ? 'Savings transfer' : 'Expense'} - ${source.name} - due day ${plan.dueDay}${plan.recurring ? ' - monthly' : ''}${destination == null ? '' : ' to ${destination.name}'}'),
+                              '${plan.savingsTransfer ? 'Savings transfer' : 'Expense'} - ${source.name} - ${_planFrequencyLabel(plan.frequency)} - due day ${plan.dueDay}${destination == null ? '' : ' to ${destination.name}'}'),
                           trailing:
                               Row(mainAxisSize: MainAxisSize.min, children: [
                             Text(
