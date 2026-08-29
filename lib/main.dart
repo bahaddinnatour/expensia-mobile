@@ -1502,13 +1502,22 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                       Text(current.name,
                           style: Theme.of(c).textTheme.titleLarge)
                     ]),
+                    if (current.isCreditCard)
+                      Text(current.balance > 0 ? 'CARD CREDIT' : 'OUTSTANDING',
+                          style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blueGrey)),
                     Text(
-                        '${current.currency.symbol} ${(current.isCreditCard ? current.outstanding : current.balance).toStringAsFixed(2)}',
-                        style: Theme.of(c).textTheme.displaySmall),
+                        '${current.currency.symbol} ${(current.isCreditCard && current.balance > 0 ? -current.balance : current.isCreditCard ? current.outstanding : current.balance).toStringAsFixed(2)}',
+                        style: Theme.of(c).textTheme.displaySmall?.copyWith(
+                            color: current.isCreditCard && current.balance > 0
+                                ? Colors.teal
+                                : null)),
                     if (current.isCreditCard) ...[
                       const SizedBox(height: 8),
                       Text(
-                          'Outstanding of ${current.currency.symbol} ${current.creditLimit.toStringAsFixed(2)} limit'),
+                          'Credit limit: ${current.currency.symbol} ${current.creditLimit.toStringAsFixed(2)}'),
                       const SizedBox(height: 6),
                       LinearProgressIndicator(
                           value: current.utilization.clamp(0, 1).toDouble(),
