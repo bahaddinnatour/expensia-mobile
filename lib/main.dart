@@ -1600,20 +1600,14 @@ class DashboardPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
-    final currencies = Currency.values.where((currency) =>
-        portfolios.any((portfolio) => portfolio.currency == currency));
     return Scaffold(
         appBar: AppBar(title: const Text('Dashboard')),
         body: ListView(padding: const EdgeInsets.all(20), children: [
-          const Text('This month across all portfolios.',
+          const Text('This month by portfolio.',
               style: TextStyle(color: Colors.blueGrey)),
           const SizedBox(height: 12),
-          ...currencies.map((currency) {
-            final matching = portfolios
-                .where((portfolio) => portfolio.currency == currency)
-                .toList();
-            final transactions = matching
-                .expand((portfolio) => portfolio.transactions)
+          ...portfolios.map((portfolio) {
+            final transactions = portfolio.transactions
                 .where((transaction) =>
                     transaction.createdAt.year == now.year &&
                     transaction.createdAt.month == now.month)
@@ -1624,9 +1618,9 @@ class DashboardPage extends StatelessWidget {
             final outflow = transactions
                 .where((transaction) => !transaction.inflow)
                 .fold(0.0, (sum, transaction) => sum + transaction.amount);
-            final netWorth =
-                matching.fold(0.0, (sum, portfolio) => sum + portfolio.balance);
-            final caps = globalCaps[currency.name] ?? {};
+            final netWorth = portfolio.balance;
+            final caps =
+                globalCaps[portfolio.currency.name] ?? portfolio.categoryCaps;
             final alerts = caps.entries
                 .map((entry) {
                   final spent = transactions
@@ -1657,7 +1651,7 @@ class DashboardPage extends StatelessWidget {
                                           fontWeight: FontWeight.bold)),
                                   const SizedBox(height: 6),
                                   Text(
-                                      '${currency.symbol} ${value.toStringAsFixed(2)}',
+                                      '${portfolio.currency.symbol} ${value.toStringAsFixed(2)}',
                                       style: TextStyle(
                                           color: color,
                                           fontSize: 16,
@@ -1672,12 +1666,11 @@ class DashboardPage extends StatelessWidget {
                         children: [
                           Row(children: [
                             Expanded(
-                                child: Text(
-                                    '${currency.name.toUpperCase()} overview',
+                                child: Text(portfolio.name.toUpperCase(),
                                     style: Theme.of(context)
                                         .textTheme
                                         .titleLarge)),
-                            Text('${matching.length} portfolios',
+                            Text(portfolio.currency.name.toUpperCase(),
                                 style: const TextStyle(color: Colors.blueGrey))
                           ]),
                           const SizedBox(height: 12),
@@ -1723,7 +1716,7 @@ class DashboardPage extends StatelessWidget {
                                         style: const TextStyle(
                                             fontWeight: FontWeight.bold)),
                                     Text(
-                                        '${currency.symbol} ${alert.spent.toStringAsFixed(2)} of ${currency.symbol} ${alert.cap.toStringAsFixed(2)} monthly cap')
+                                        '${portfolio.currency.symbol} ${alert.spent.toStringAsFixed(2)} of ${portfolio.currency.symbol} ${alert.cap.toStringAsFixed(2)} monthly cap')
                                   ])))
                         ])));
           })
