@@ -258,6 +258,25 @@ class MonthlyPlan {
 
 enum PortfolioType { bank, creditCard }
 
+const _portfolioIcons = <String, IconData>{
+  'bank': Icons.account_balance_outlined,
+  'wallet': Icons.account_balance_wallet_outlined,
+  'savings': Icons.savings_outlined,
+  'card': Icons.credit_card_outlined,
+  'investment': Icons.trending_up_outlined,
+  'cash': Icons.payments_outlined,
+  'home': Icons.home_outlined,
+};
+
+IconData _portfolioIcon(Portfolio portfolio) {
+  final selected = _portfolioIcons[portfolio.iconKey];
+  if (selected != null) return selected;
+  if (portfolio.isCreditCard) return Icons.credit_card_outlined;
+  if (portfolio.name.toLowerCase().contains('saving'))
+    return Icons.savings_outlined;
+  return Icons.account_balance_outlined;
+}
+
 class Portfolio {
   Portfolio(
       {required this.id,
@@ -266,6 +285,7 @@ class Portfolio {
       this.currency = Currency.sar,
       this.type = PortfolioType.bank,
       this.creditLimit = 0,
+      this.iconKey,
       List<Tx>? transactions,
       Map<String, double>? categoryCaps})
       : transactions = transactions ?? [],
@@ -276,6 +296,7 @@ class Portfolio {
   Currency currency;
   PortfolioType type;
   double creditLimit;
+  String? iconKey;
   List<Tx> transactions;
   Map<String, double> categoryCaps;
   double get balance =>
@@ -293,6 +314,7 @@ class Portfolio {
         'currency': currency.name,
         'type': type.name,
         'creditLimit': creditLimit,
+        'iconKey': iconKey,
         'transactions': transactions.map((x) => x.json()).toList(),
         'categoryCaps': categoryCaps
       };
@@ -305,6 +327,7 @@ class Portfolio {
       type: PortfolioType.values.firstWhere((type) => type.name == x['type'],
           orElse: () => PortfolioType.bank),
       creditLimit: (x['creditLimit'] as num? ?? 0).toDouble(),
+      iconKey: x['iconKey'],
       transactions: (x['transactions'] as List? ?? [])
           .map((t) => Tx.fromJson(t))
           .toList(),
@@ -1346,8 +1369,13 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               initialValue: selected,
               decoration: const InputDecoration(labelText: 'Active portfolio'),
               items: portfolios
-                  .map(
-                      (p) => DropdownMenuItem(value: p.id, child: Text(p.name)))
+                  .map((p) => DropdownMenuItem(
+                      value: p.id,
+                      child: Row(children: [
+                        Icon(_portfolioIcon(p), size: 18),
+                        const SizedBox(width: 8),
+                        Text(p.name)
+                      ])))
                   .toList(),
               onChanged: (v) {
                 setState(() => selected = v!);
@@ -1358,7 +1386,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               child: Padding(
                   padding: const EdgeInsets.all(24),
                   child: Column(children: [
-                    Text(current.name, style: Theme.of(c).textTheme.titleLarge),
+                    Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                      Icon(_portfolioIcon(current)),
+                      const SizedBox(width: 8),
+                      Text(current.name,
+                          style: Theme.of(c).textTheme.titleLarge)
+                    ]),
                     Text(
                         '${current.currency.symbol} ${(current.isCreditCard ? current.outstanding : current.balance).toStringAsFixed(2)}',
                         style: Theme.of(c).textTheme.displaySmall),
@@ -1666,20 +1699,25 @@ class DashboardPage extends StatelessWidget {
                         children: [
                           Row(children: [
                             Expanded(
-                                child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                  Text(portfolio.currency.name.toUpperCase(),
-                                      style: const TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.blueGrey)),
-                                  Text(portfolio.name.toUpperCase(),
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleLarge)
-                                ])),
+                                child: Row(children: [
+                              Icon(_portfolioIcon(portfolio)),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                  child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                    Text(portfolio.currency.name.toUpperCase(),
+                                        style: const TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.blueGrey)),
+                                    Text(portfolio.name.toUpperCase(),
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleLarge)
+                                  ]))
+                            ])),
                             Text(
                                 portfolio.isCreditCard
                                     ? 'CREDIT CARD'
@@ -2058,6 +2096,7 @@ class _SettingsState extends State<Settings> {
             currency: p.currency,
             type: p.type,
             creditLimit: p.creditLimit,
+            iconKey: p.iconKey,
             transactions: [...p.transactions],
             categoryCaps: {...p.categoryCaps}))
         .toList();
@@ -2137,8 +2176,9 @@ class _SettingsState extends State<Settings> {
     final limit = TextEditingController();
     var currency = current.currency;
     var type = PortfolioType.bank;
+    var iconKey = 'bank';
     final r = await showDialog<
-            ({String name, PortfolioType type, double limit})>(
+            ({String name, PortfolioType type, double limit, String iconKey})>(
         context: context,
         builder: (ctx) => StatefulBuilder(
             builder: (ctx, setD) => AlertDialog(
@@ -2169,6 +2209,21 @@ class _SettingsState extends State<Settings> {
                                 child: Text('Credit card'))
                           ],
                           onChanged: (v) => setD(() => type = v!)),
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String>(
+                          initialValue: iconKey,
+                          decoration: const InputDecoration(
+                              labelText: 'Portfolio icon'),
+                          items: _portfolioIcons.entries
+                              .map((entry) => DropdownMenuItem(
+                                  value: entry.key,
+                                  child: Row(children: [
+                                    Icon(entry.value, size: 18),
+                                    const SizedBox(width: 8),
+                                    Text(entry.key.toUpperCase())
+                                  ])))
+                              .toList(),
+                          onChanged: (value) => setD(() => iconKey = value!)),
                       if (type == PortfolioType.creditCard) ...[
                         const SizedBox(height: 10),
                         TextField(
@@ -2190,7 +2245,8 @@ class _SettingsState extends State<Settings> {
                                 type: type,
                                 limit: double.tryParse(
                                         limit.text.replaceAll(',', '')) ??
-                                    0
+                                    0,
+                                iconKey: iconKey
                               )),
                           child: const Text('Add'))
                     ])));
@@ -2205,7 +2261,8 @@ class _SettingsState extends State<Settings> {
             name: r.name.trim(),
             currency: currency,
             type: r.type,
-            creditLimit: r.limit);
+            creditLimit: r.limit,
+            iconKey: r.iconKey);
         portfolios.add(p);
         selected = p.id;
       });
@@ -2213,25 +2270,54 @@ class _SettingsState extends State<Settings> {
 
   Future<void> renamePortfolio(Portfolio portfolio) async {
     final name = TextEditingController(text: portfolio.name);
-    final updatedName = await showDialog<String>(
+    var iconKey = portfolio.iconKey ??
+        (portfolio.isCreditCard
+            ? 'card'
+            : portfolio.name.toLowerCase().contains('saving')
+                ? 'savings'
+                : 'bank');
+    final updated = await showDialog<({String name, String iconKey})>(
         context: context,
-        builder: (ctx) => AlertDialog(
-                title: const Text('Rename portfolio'),
-                content: TextField(
-                    controller: name,
-                    autofocus: true,
-                    decoration:
-                        const InputDecoration(labelText: 'Portfolio name')),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Cancel')),
-                  FilledButton(
-                      onPressed: () => Navigator.pop(ctx, name.text),
-                      child: const Text('Save'))
-                ]));
-    if (updatedName != null && updatedName.trim().isNotEmpty) {
-      setState(() => portfolio.name = updatedName.trim());
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, setDialog) => AlertDialog(
+                    title: const Text('Rename portfolio'),
+                    content: Column(mainAxisSize: MainAxisSize.min, children: [
+                      TextField(
+                          controller: name,
+                          autofocus: true,
+                          decoration: const InputDecoration(
+                              labelText: 'Portfolio name')),
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String>(
+                          value: iconKey,
+                          decoration: const InputDecoration(
+                              labelText: 'Portfolio icon'),
+                          items: _portfolioIcons.entries
+                              .map((entry) => DropdownMenuItem(
+                                  value: entry.key,
+                                  child: Row(children: [
+                                    Icon(entry.value, size: 18),
+                                    const SizedBox(width: 8),
+                                    Text(entry.key.toUpperCase())
+                                  ])))
+                              .toList(),
+                          onChanged: (value) =>
+                              setDialog(() => iconKey = value!))
+                    ]),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(
+                              ctx, (name: name.text, iconKey: iconKey)),
+                          child: const Text('Save'))
+                    ])));
+    if (updated != null && updated.name.trim().isNotEmpty) {
+      setState(() {
+        portfolio.name = updated.name.trim();
+        portfolio.iconKey = updated.iconKey;
+      });
     }
   }
 
@@ -2566,11 +2652,10 @@ class _SettingsState extends State<Settings> {
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
             ...portfolios.map((p) => ListTile(
                 onTap: () => setState(() => selected = p.id),
-                leading: Icon(p.id == selected
-                    ? Icons.check_circle
-                    : p.isCreditCard
-                        ? Icons.credit_card
-                        : Icons.account_balance_wallet_outlined),
+                leading: CircleAvatar(
+                    child: Icon(p.id == selected
+                        ? Icons.check_circle
+                        : _portfolioIcon(p))),
                 title: Text(p.name),
                 subtitle: Text(p.isCreditCard
                     ? '${p.currency.nameLabel} - limit ${p.currency.symbol} ${p.creditLimit.toStringAsFixed(2)}'
