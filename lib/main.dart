@@ -375,7 +375,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   Portfolio get current => portfolios.firstWhere((p) => p.id == selected,
       orElse: () => portfolios.first);
   double total(bool inflow) => current.transactions
-      .where((t) => t.inflow == inflow)
+      .where((t) => t.inflow == inflow && t.transferId == null)
       .fold(0, (sum, t) => sum + t.amount);
   @override
   void initState() {
@@ -1002,6 +1002,113 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> transferMoney() async {
+    final amount = TextEditingController();
+    final description = TextEditingController();
+    final destinations = portfolios
+        .where((portfolio) =>
+            portfolio.id != current.id &&
+            portfolio.currency == current.currency)
+        .toList();
+    if (destinations.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content:
+              Text('Create another portfolio with the same currency first.')));
+      return;
+    }
+    var destination = destinations.first;
+    final transfer = await showDialog<
+            ({String description, double amount, Portfolio destination})>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, setDialog) => AlertDialog(
+                    title: const Text('Transfer money'),
+                    content: Column(mainAxisSize: MainAxisSize.min, children: [
+                      ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(_portfolioIcon(current)),
+                          title: Text('From: ${current.name}'),
+                          subtitle: Text(current.currency.name.toUpperCase())),
+                      DropdownButtonFormField<Portfolio>(
+                          value: destination,
+                          decoration:
+                              const InputDecoration(labelText: 'To portfolio'),
+                          items: destinations
+                              .map((portfolio) => DropdownMenuItem(
+                                  value: portfolio,
+                                  child: Row(children: [
+                                    Icon(_portfolioIcon(portfolio), size: 18),
+                                    const SizedBox(width: 8),
+                                    Text(portfolio.name)
+                                  ])))
+                              .toList(),
+                          onChanged: (value) =>
+                              setDialog(() => destination = value!)),
+                      const SizedBox(height: 10),
+                      TextField(
+                          controller: amount,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          decoration: InputDecoration(
+                              labelText: 'Amount',
+                              prefixText: '${current.currency.symbol} ')),
+                      const SizedBox(height: 10),
+                      TextField(
+                          controller: description,
+                          decoration: const InputDecoration(
+                              labelText: 'Description (optional)'))
+                    ]),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(ctx, (
+                                description: description.text.trim(),
+                                amount: double.tryParse(
+                                        amount.text.replaceAll(',', '')) ??
+                                    0,
+                                destination: destination
+                              )),
+                          child: const Text('Transfer'))
+                    ])));
+    amount.dispose();
+    description.dispose();
+    if (transfer == null || transfer.amount <= 0) return;
+    final now = DateTime.now();
+    final transferId = 'transfer_${now.microsecondsSinceEpoch}';
+    final baseDescription = transfer.description.isEmpty
+        ? (transfer.destination.isCreditCard
+            ? 'Payment to ${transfer.destination.name}'
+            : 'Transfer to ${transfer.destination.name}')
+        : transfer.description;
+    setState(() {
+      current.transactions.insert(
+          0,
+          Tx(
+              id: '${now.microsecondsSinceEpoch}_out',
+              description: baseDescription,
+              category: 'Personal transfer',
+              amount: transfer.amount,
+              inflow: false,
+              createdAt: now,
+              transferId: transferId));
+      transfer.destination.transactions.insert(
+          0,
+          Tx(
+              id: '${now.microsecondsSinceEpoch}_in',
+              description: transfer.description.isEmpty
+                  ? 'Transfer from ${current.name}'
+                  : transfer.description,
+              category: 'Personal transfer',
+              amount: transfer.amount,
+              inflow: true,
+              createdAt: now,
+              transferId: transferId));
+    });
+    await save();
+  }
+
   Future<void> showDetails(Tx tx, [Portfolio? portfolio]) => showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1056,6 +1163,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             .expand((portfolio) => portfolio.transactions)
             .where((tx) =>
                 !tx.inflow &&
+                tx.transferId == null &&
                 tx.category == cap.key &&
                 tx.createdAt.year == now.year &&
                 tx.createdAt.month == now.month)
@@ -1431,10 +1539,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           const SizedBox(height: 8),
           _ReportGraph(
               inflow: reportPortfolio.transactions
-                  .where((tx) => tx.inflow)
+                  .where((tx) => tx.inflow && tx.transferId == null)
                   .fold(0, (sum, tx) => sum + tx.amount),
               outflow: reportPortfolio.transactions
-                  .where((tx) => !tx.inflow)
+                  .where((tx) => !tx.inflow && tx.transferId == null)
                   .fold(0, (sum, tx) => sum + tx.amount),
               currency: current.currency,
               onTap: () => Navigator.push(
@@ -1461,6 +1569,13 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                         ? 'Add card charge'
                         : 'Add outflow')))
           ]),
+          const SizedBox(height: 10),
+          SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                  onPressed: transferMoney,
+                  icon: const Icon(Icons.swap_horiz),
+                  label: const Text('Transfer money'))),
           const SizedBox(height: 24),
           Row(children: [
             Text('Transactions', style: Theme.of(c).textTheme.titleLarge),
@@ -1526,6 +1641,7 @@ class _TrendsPageState extends State<TrendsPage> {
   Widget build(BuildContext context) {
     final all = widget.portfolios
         .expand((portfolio) => portfolio.transactions)
+        .where((transaction) => transaction.transferId == null)
         .toList();
     final selected = all
         .where((transaction) =>
@@ -1642,6 +1758,7 @@ class DashboardPage extends StatelessWidget {
           ...portfolios.map((portfolio) {
             final transactions = portfolio.transactions
                 .where((transaction) =>
+                    transaction.transferId == null &&
                     transaction.createdAt.year == now.year &&
                     transaction.createdAt.month == now.month)
                 .toList();
@@ -1870,7 +1987,8 @@ class CategoryReportPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final totals = <String, double>{};
-    for (final tx in portfolio.transactions.where((tx) => !tx.inflow)) {
+    for (final tx in portfolio.transactions
+        .where((tx) => !tx.inflow && tx.transferId == null)) {
       totals.update(tx.category, (amount) => amount + tx.amount,
           ifAbsent: () => tx.amount);
     }
@@ -1907,6 +2025,7 @@ class CategoryReportPage extends StatelessWidget {
                   final monthlyUsed = portfolio.transactions
                       .where((tx) =>
                           !tx.inflow &&
+                          tx.transferId == null &&
                           tx.category == entry.key &&
                           tx.createdAt.year == now.year &&
                           tx.createdAt.month == now.month)
@@ -2011,7 +2130,8 @@ class CategoryTransactionsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final transactions = portfolio.transactions
-        .where((tx) => !tx.inflow && tx.category == category)
+        .where((tx) =>
+            !tx.inflow && tx.transferId == null && tx.category == category)
         .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return Scaffold(
