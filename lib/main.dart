@@ -173,12 +173,18 @@ class Tx {
       required this.inflow,
       required this.createdAt,
       this.transferId,
-      this.loanId});
+      this.loanId,
+      this.transferRate,
+      this.expectedReceived,
+      this.actualReceived,
+      this.transferFee,
+      this.destinationPortfolioId});
   final String id, description, category;
   final double amount;
   final bool inflow;
   final DateTime createdAt;
-  final String? transferId, loanId;
+  final String? transferId, loanId, destinationPortfolioId;
+  final double? transferRate, expectedReceived, actualReceived, transferFee;
   Map<String, dynamic> json() => {
         'id': id,
         'description': description,
@@ -187,7 +193,12 @@ class Tx {
         'inflow': inflow,
         'createdAt': createdAt.toIso8601String(),
         'transferId': transferId,
-        'loanId': loanId
+        'loanId': loanId,
+        'transferRate': transferRate,
+        'expectedReceived': expectedReceived,
+        'actualReceived': actualReceived,
+        'transferFee': transferFee,
+        'destinationPortfolioId': destinationPortfolioId
       };
   factory Tx.fromJson(Map<String, dynamic> x) => Tx(
       id: x['id'],
@@ -197,7 +208,12 @@ class Tx {
       inflow: x['inflow'],
       createdAt: DateTime.parse(x['createdAt']),
       transferId: x['transferId'],
-      loanId: x['loanId']);
+      loanId: x['loanId'],
+      transferRate: (x['transferRate'] as num?)?.toDouble(),
+      expectedReceived: (x['expectedReceived'] as num?)?.toDouble(),
+      actualReceived: (x['actualReceived'] as num?)?.toDouble(),
+      transferFee: (x['transferFee'] as num?)?.toDouble(),
+      destinationPortfolioId: x['destinationPortfolioId']);
 }
 
 class Loan {
@@ -864,6 +880,21 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       } else {
         await save();
       }
+      final loanRows = await _cloud
+          .from('finance_records')
+          .select('payload')
+          .eq('user_id', user.id)
+          .eq('record_type', 'loan')
+          .isFilter('deleted_at', null);
+      final cloudLoans = loanRows
+          .where((row) => row['payload'] is Map)
+          .map(
+              (row) => Loan.fromJson(Map<String, dynamic>.from(row['payload'])))
+          .toList();
+      if (cloudLoans.isNotEmpty || loans.isNotEmpty) {
+        setState(() => loans = cloudLoans);
+        await save();
+      }
       if (mounted) {
         setState(() => cloudSynced = true);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1106,76 +1137,145 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   Future<void> transferMoney() async {
     final amount = TextEditingController();
     final description = TextEditingController();
-    final destinations = portfolios
-        .where((portfolio) =>
-            portfolio.id != current.id &&
-            portfolio.currency == current.currency)
-        .toList();
+    final rate = TextEditingController();
+    final received = TextEditingController();
+    final fee = TextEditingController();
+    final destinations =
+        portfolios.where((portfolio) => portfolio.id != current.id).toList();
     if (destinations.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content:
-              Text('Create another portfolio with the same currency first.')));
+          content: Text('Create another portfolio before making a transfer.')));
       return;
     }
     var destination = destinations.first;
     final transfer = await showDialog<
-            ({String description, double amount, Portfolio destination})>(
+            ({
+              String description,
+              double amount,
+              Portfolio destination,
+              double rate,
+              double received,
+              double fee
+            })>(
         context: context,
-        builder: (ctx) => StatefulBuilder(
-            builder: (ctx, setDialog) => AlertDialog(
-                    title: const Text('Transfer money'),
-                    content: Column(mainAxisSize: MainAxisSize.min, children: [
-                      ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: Icon(_portfolioIcon(current)),
-                          title: Text('From: ${current.name}'),
-                          subtitle: Text(current.currency.name.toUpperCase())),
-                      DropdownButtonFormField<Portfolio>(
-                          value: destination,
-                          decoration:
-                              const InputDecoration(labelText: 'To portfolio'),
-                          items: destinations
-                              .map((portfolio) => DropdownMenuItem(
-                                  value: portfolio,
-                                  child: Row(children: [
-                                    Icon(_portfolioIcon(portfolio), size: 18),
-                                    const SizedBox(width: 8),
-                                    Text(portfolio.name)
-                                  ])))
-                              .toList(),
-                          onChanged: (value) =>
-                              setDialog(() => destination = value!)),
+        builder: (ctx) => StatefulBuilder(builder: (ctx, setDialog) {
+              final sent =
+                  double.tryParse(amount.text.replaceAll(',', '')) ?? 0;
+              final quotedRate =
+                  double.tryParse(rate.text.replaceAll(',', '')) ?? 0;
+              final actualReceived =
+                  double.tryParse(received.text.replaceAll(',', '')) ?? 0;
+              final crossCurrency = current.currency != destination.currency;
+              final expected = quotedRate > 0 ? sent / quotedRate : 0.0;
+              final effectiveRate =
+                  actualReceived > 0 ? sent / actualReceived : 0.0;
+              return AlertDialog(
+                  title: const Text('Transfer money'),
+                  content: SingleChildScrollView(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(_portfolioIcon(current)),
+                        title: Text('From: ${current.name}'),
+                        subtitle: Text(current.currency.name.toUpperCase())),
+                    DropdownButtonFormField<Portfolio>(
+                        value: destination,
+                        decoration:
+                            const InputDecoration(labelText: 'To portfolio'),
+                        items: destinations
+                            .map((portfolio) => DropdownMenuItem(
+                                value: portfolio,
+                                child: Row(children: [
+                                  Icon(_portfolioIcon(portfolio), size: 18),
+                                  const SizedBox(width: 8),
+                                  Text(portfolio.name)
+                                ])))
+                            .toList(),
+                        onChanged: (value) =>
+                            setDialog(() => destination = value!)),
+                    const SizedBox(height: 10),
+                    TextField(
+                        controller: amount,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: InputDecoration(
+                            labelText: 'Amount sent',
+                            prefixText: '${current.currency.symbol} ')),
+                    if (crossCurrency) ...[
                       const SizedBox(height: 10),
                       TextField(
-                          controller: amount,
+                          controller: rate,
+                          onChanged: (_) => setDialog(() {}),
                           keyboardType: const TextInputType.numberWithOptions(
                               decimal: true),
                           decoration: InputDecoration(
-                              labelText: 'Amount',
-                              prefixText: '${current.currency.symbol} ')),
+                              labelText:
+                                  'Quoted rate (${current.currency.symbol} per ${destination.currency.symbol})')),
                       const SizedBox(height: 10),
                       TextField(
-                          controller: description,
-                          decoration: const InputDecoration(
-                              labelText: 'Description (optional)'))
-                    ]),
-                    actions: [
-                      TextButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          child: const Text('Cancel')),
-                      FilledButton(
-                          onPressed: () => Navigator.pop(ctx, (
-                                description: description.text.trim(),
-                                amount: double.tryParse(
-                                        amount.text.replaceAll(',', '')) ??
-                                    0,
-                                destination: destination
-                              )),
-                          child: const Text('Transfer'))
-                    ])));
+                          controller: received,
+                          onChanged: (_) => setDialog(() {}),
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          decoration: InputDecoration(
+                              labelText: 'Actual amount received',
+                              prefixText: '${destination.currency.symbol} ')),
+                      const SizedBox(height: 8),
+                      if (quotedRate > 0 && actualReceived > 0)
+                        Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                                'Expected ${destination.currency.symbol} ${expected.toStringAsFixed(2)}. Effective rate: ${current.currency.symbol} ${effectiveRate.toStringAsFixed(4)} per ${destination.currency.symbol}. Difference: ${destination.currency.symbol} ${(actualReceived - expected).toStringAsFixed(2)}.',
+                                style: const TextStyle(
+                                    fontSize: 12, color: Colors.blueGrey))),
+                    ],
+                    const SizedBox(height: 10),
+                    TextField(
+                        controller: fee,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: InputDecoration(
+                            labelText: 'Transfer fee (optional)',
+                            prefixText: '${current.currency.symbol} ')),
+                    const SizedBox(height: 10),
+                    TextField(
+                        controller: description,
+                        decoration: const InputDecoration(
+                            labelText: 'Description (optional)'))
+                  ])),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('Cancel')),
+                    FilledButton(
+                        onPressed: () => Navigator.pop(ctx, (
+                              description: description.text.trim(),
+                              amount: sent,
+                              destination: destination,
+                              rate: quotedRate,
+                              received: actualReceived,
+                              fee: double.tryParse(
+                                      fee.text.replaceAll(',', '')) ??
+                                  0
+                            )),
+                        child: const Text('Transfer'))
+                  ]);
+            }));
     amount.dispose();
     description.dispose();
+    rate.dispose();
+    received.dispose();
+    fee.dispose();
     if (transfer == null || transfer.amount <= 0) return;
+    final crossCurrency = current.currency != transfer.destination.currency;
+    if (crossCurrency && (transfer.rate <= 0 || transfer.received <= 0)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(
+                'Enter a valid transfer rate and actual received amount.')));
+      }
+      return;
+    }
     final now = DateTime.now();
     final transferId = 'transfer_${now.microsecondsSinceEpoch}';
     final baseDescription = transfer.description.isEmpty
@@ -1193,7 +1293,13 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               amount: transfer.amount,
               inflow: false,
               createdAt: now,
-              transferId: transferId));
+              transferId: transferId,
+              transferRate: crossCurrency ? transfer.rate : null,
+              expectedReceived:
+                  crossCurrency ? transfer.amount / transfer.rate : null,
+              actualReceived: crossCurrency ? transfer.received : null,
+              transferFee: transfer.fee > 0 ? transfer.fee : null,
+              destinationPortfolioId: transfer.destination.id));
       transfer.destination.transactions.insert(
           0,
           Tx(
@@ -1202,10 +1308,27 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   ? 'Transfer from ${current.name}'
                   : transfer.description,
               category: 'Personal transfer',
-              amount: transfer.amount,
+              amount: crossCurrency ? transfer.received : transfer.amount,
               inflow: true,
               createdAt: now,
-              transferId: transferId));
+              transferId: transferId,
+              transferRate: crossCurrency ? transfer.rate : null,
+              expectedReceived:
+                  crossCurrency ? transfer.amount / transfer.rate : null,
+              actualReceived: crossCurrency ? transfer.received : null,
+              transferFee: transfer.fee > 0 ? transfer.fee : null,
+              destinationPortfolioId: transfer.destination.id));
+      if (transfer.fee > 0) {
+        current.transactions.insert(
+            0,
+            Tx(
+                id: '${now.microsecondsSinceEpoch}_fee',
+                description: 'Transfer fee to ${transfer.destination.name}',
+                category: 'Personal transfer',
+                amount: transfer.fee,
+                inflow: false,
+                createdAt: now));
+      }
     });
     await save();
   }
@@ -1226,6 +1349,20 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     Text('Category: ${tx.category}'),
                     Text(
                         'Amount: ${(portfolio ?? current).currency.symbol} ${tx.amount.toStringAsFixed(2)}'),
+                    if (tx.transferRate != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                          'Quoted rate: ${tx.transferRate!.toStringAsFixed(4)} source units per destination unit'),
+                      Text(
+                          'Expected received: ${tx.expectedReceived?.toStringAsFixed(2) ?? '-'}'),
+                      Text(
+                          'Actual received: ${tx.actualReceived?.toStringAsFixed(2) ?? '-'}'),
+                      Text(
+                          'Exchange difference: ${((tx.actualReceived ?? 0) - (tx.expectedReceived ?? 0)).toStringAsFixed(2)}'),
+                      if (tx.transferFee != null)
+                        Text(
+                            'Transfer fee: ${(portfolio ?? current).currency.symbol} ${tx.transferFee!.toStringAsFixed(2)}')
+                    ],
                     Text('Date: ${_shortDateTime(tx.createdAt)}'),
                     Text('Day: ${_dayName(tx.createdAt)}')
                   ]),
@@ -1376,6 +1513,13 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               portfolios: portfolios, globalCaps: globalCategoryCaps)));
   Future<void> openTrends() => Navigator.push<void>(context,
       MaterialPageRoute(builder: (_) => TrendsPage(portfolios: portfolios)));
+  Future<void> openProjection() => Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+          builder: (_) => ProjectionPage(
+              portfolios: portfolios,
+              plans: monthlyPlans,
+              globalCaps: globalCategoryCaps)));
   Future<void> settings() async {
     Future<void> applySettings(_SettingsData data) async {
       setState(() {
@@ -1571,6 +1715,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   tooltip: 'Spending trends',
                   onPressed: openTrends,
                   icon: const Icon(Icons.insights_outlined)),
+              IconButton(
+                  tooltip: 'Month projection',
+                  onPressed: openProjection,
+                  icon: const Icon(Icons.account_balance_wallet_outlined)),
               IconButton(
                   tooltip: signedIn ? 'Cloud account connected' : 'Cloud login',
                   onPressed: connectCloud,
@@ -1856,6 +2004,72 @@ class _TrendsPageState extends State<TrendsPage> {
                   title: Text(entry.key),
                   trailing: Text(entry.value.toStringAsFixed(2),
                       style: const TextStyle(fontWeight: FontWeight.bold)))))
+        ]));
+  }
+}
+
+class ProjectionPage extends StatelessWidget {
+  const ProjectionPage(
+      {super.key,
+      required this.portfolios,
+      required this.plans,
+      required this.globalCaps});
+  final List<Portfolio> portfolios;
+  final List<MonthlyPlan> plans;
+  final Map<String, Map<String, double>> globalCaps;
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    return Scaffold(
+        appBar: AppBar(title: const Text('Month projection')),
+        body: ListView(padding: const EdgeInsets.all(20), children: [
+          const Text('Projected cash left',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          const Text(
+              'Remaining plans and category caps are combined by category, so they are not counted twice.'),
+          const SizedBox(height: 14),
+          ...portfolios
+              .where((portfolio) => !portfolio.isCreditCard)
+              .map((portfolio) {
+            final spent = <String, double>{};
+            for (final tx in portfolio.transactions.where((tx) =>
+                !tx.inflow &&
+                tx.createdAt.year == now.year &&
+                tx.createdAt.month == now.month)) {
+              spent[tx.category] = (spent[tx.category] ?? 0) + tx.amount;
+            }
+            final caps = globalCaps[portfolio.currency.name] ??
+                globalCaps[portfolio.currency.name.toLowerCase()] ??
+                portfolio.categoryCaps;
+            final pending = <String, double>{};
+            for (final plan in plans.where((plan) =>
+                plan.portfolioId == portfolio.id &&
+                _planOccursInMonth(plan, now) &&
+                plan.lastCreatedMonth != _planPeriodKey(plan, now) &&
+                plan.lastSkippedMonth != _planPeriodKey(plan, now))) {
+              pending[plan.category] =
+                  (pending[plan.category] ?? 0) + plan.amount;
+            }
+            final categories = {...caps.keys, ...pending.keys};
+            final remaining = categories.fold<double>(0, (sum, category) {
+              final target = [caps[category] ?? 0, pending[category] ?? 0]
+                  .reduce((a, b) => a > b ? a : b);
+              return sum +
+                  (target - (spent[category] ?? 0)).clamp(0, double.infinity);
+            });
+            return Card(
+                child: ListTile(
+                    leading:
+                        CircleAvatar(child: Icon(_portfolioIcon(portfolio))),
+                    title: Text(portfolio.name),
+                    subtitle: Text(
+                        'Current ${portfolio.currency.symbol} ${portfolio.balance.toStringAsFixed(2)}\nRemaining commitments ${portfolio.currency.symbol} ${remaining.toStringAsFixed(2)}'),
+                    isThreeLine: true,
+                    trailing: Text(
+                        '${portfolio.currency.symbol} ${(portfolio.balance - remaining).toStringAsFixed(2)}',
+                        style: const TextStyle(fontWeight: FontWeight.bold))));
+          })
         ]));
   }
 }
@@ -3076,6 +3290,12 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
   }
 
   Future<void> edit(Portfolio portfolio, Tx tx) async {
+    if (tx.transferRate != null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Delete and recreate a cross-currency transfer to change its amounts.')));
+      return;
+    }
     final description = TextEditingController(text: tx.description);
     final amount = TextEditingController(text: tx.amount.toStringAsFixed(2));
     var category = tx.category;
@@ -3126,7 +3346,14 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
                                       0,
                                   inflow: tx.inflow,
                                   createdAt: tx.createdAt,
-                                  transferId: tx.transferId)),
+                                  transferId: tx.transferId,
+                                  loanId: tx.loanId,
+                                  transferRate: tx.transferRate,
+                                  expectedReceived: tx.expectedReceived,
+                                  actualReceived: tx.actualReceived,
+                                  transferFee: tx.transferFee,
+                                  destinationPortfolioId:
+                                      tx.destinationPortfolioId)),
                           child: const Text('Save'))
                     ])));
     if (updated == null || updated.description.isEmpty || updated.amount <= 0)
@@ -3145,7 +3372,13 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
                 amount: updated.amount,
                 inflow: entry.inflow,
                 createdAt: updated.createdAt,
-                transferId: entry.transferId);
+                transferId: entry.transferId,
+                loanId: entry.loanId,
+                transferRate: entry.transferRate,
+                expectedReceived: entry.expectedReceived,
+                actualReceived: entry.actualReceived,
+                transferFee: entry.transferFee,
+                destinationPortfolioId: entry.destinationPortfolioId);
           }
         }
       }
