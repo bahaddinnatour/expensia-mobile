@@ -1656,7 +1656,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               onCreate: createPlanTransaction,
               onSkip: skipPlanTransaction)));
 
-  Future<void> openPlans() async {
+  Future<void> openPlans({bool keepNavigation = false}) async {
     final initialPlanIds = monthlyPlans.map((plan) => plan.id).toSet();
     await Navigator.push<void>(
         context,
@@ -1666,7 +1666,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 loans: loans,
                 portfolios: portfolios,
                 categories: categories,
-                icons: categoryIcons)));
+                icons: categoryIcons,
+                bottomNavigationBar:
+                    keepNavigation ? appNavigationBar(2) : null)));
     if (!mounted) return;
     setState(() {});
     await save();
@@ -1764,8 +1766,34 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     if (mounted) setState(() => bottomNavigationIndex = 0);
   }
 
-  Future<void> onBottomNavigationSelected(int index) async {
+  Widget appNavigationBar(int activeIndex) => NavigationBar(
+          selectedIndex: activeIndex,
+          onDestinationSelected: (index) =>
+              onBottomNavigationSelected(index, activeIndex),
+          destinations: const [
+            NavigationDestination(
+                icon: Icon(Icons.home_outlined),
+                selectedIcon: Icon(Icons.home),
+                label: 'Home'),
+            NavigationDestination(
+                icon: Icon(Icons.bar_chart_outlined),
+                selectedIcon: Icon(Icons.bar_chart),
+                label: 'Report'),
+            NavigationDestination(
+                icon: Icon(Icons.event_note_outlined),
+                selectedIcon: Icon(Icons.event_note),
+                label: 'Plans'),
+            NavigationDestination(
+                icon: Icon(Icons.more_horiz),
+                selectedIcon: Icon(Icons.more),
+                label: 'More')
+          ]);
+
+  Future<void> onBottomNavigationSelected(int index,
+      [int activeIndex = 0]) async {
+    if (index == activeIndex) return;
     if (index == 0) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
       setState(() => bottomNavigationIndex = 0);
       return;
     }
@@ -1775,10 +1803,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           context,
           MaterialPageRoute(
               builder: (_) => CategoryReportPage(
-                  portfolio: current, icons: categoryIcons)));
+                  portfolio: current,
+                  icons: categoryIcons,
+                  bottomNavigationBar: appNavigationBar(1))));
     } else if (index == 2) {
       setState(() => bottomNavigationIndex = 2);
-      await openPlans();
+      await openPlans(keepNavigation: true);
     } else {
       await openMoreMenu();
       return;
@@ -1843,27 +1873,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           activityBell(notices),
           IconButton(onPressed: settings, icon: const Icon(Icons.settings))
         ]),
-        bottomNavigationBar: NavigationBar(
-            selectedIndex: bottomNavigationIndex,
-            onDestinationSelected: onBottomNavigationSelected,
-            destinations: const [
-              NavigationDestination(
-                  icon: Icon(Icons.home_outlined),
-                  selectedIcon: Icon(Icons.home),
-                  label: 'Home'),
-              NavigationDestination(
-                  icon: Icon(Icons.bar_chart_outlined),
-                  selectedIcon: Icon(Icons.bar_chart),
-                  label: 'Report'),
-              NavigationDestination(
-                  icon: Icon(Icons.event_note_outlined),
-                  selectedIcon: Icon(Icons.event_note),
-                  label: 'Plans'),
-              NavigationDestination(
-                  icon: Icon(Icons.more_horiz),
-                  selectedIcon: Icon(Icons.more),
-                  label: 'More')
-            ]),
+        bottomNavigationBar: appNavigationBar(bottomNavigationIndex),
         body: ListView(padding: const EdgeInsets.all(20), children: [
           DropdownButtonFormField<String>(
               initialValue: selected,
@@ -2448,9 +2458,13 @@ class _Bar extends StatelessWidget {
 
 class CategoryReportPage extends StatelessWidget {
   const CategoryReportPage(
-      {super.key, required this.portfolio, required this.icons});
+      {super.key,
+      required this.portfolio,
+      required this.icons,
+      this.bottomNavigationBar});
   final Portfolio portfolio;
   final Map<String, int> icons;
+  final Widget? bottomNavigationBar;
   @override
   Widget build(BuildContext context) {
     final totals = <String, double>{};
@@ -2465,6 +2479,7 @@ class CategoryReportPage extends StatelessWidget {
     final now = DateTime.now();
     return Scaffold(
         appBar: AppBar(title: Text('${portfolio.name} report')),
+        bottomNavigationBar: bottomNavigationBar,
         body: entries.isEmpty
             ? const Center(child: Text('No outflow transactions yet.'))
             : ListView(padding: const EdgeInsets.all(20), children: [
@@ -4062,12 +4077,14 @@ class MonthlyPlansPage extends StatefulWidget {
       required this.loans,
       required this.portfolios,
       required this.categories,
-      required this.icons});
+      required this.icons,
+      this.bottomNavigationBar});
   final List<MonthlyPlan> plans;
   final List<Loan> loans;
   final List<Portfolio> portfolios;
   final List<String> categories;
   final Map<String, int> icons;
+  final Widget? bottomNavigationBar;
   @override
   State<MonthlyPlansPage> createState() => _MonthlyPlansPageState();
 }
@@ -4298,6 +4315,7 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
               onPressed: removeDuplicates,
               icon: const Icon(Icons.content_copy_outlined))
         ]),
+        bottomNavigationBar: widget.bottomNavigationBar,
         body: plans.isEmpty
             ? const Center(child: Text('No recurring plans yet.'))
             : ListView(padding: const EdgeInsets.all(20), children: [
