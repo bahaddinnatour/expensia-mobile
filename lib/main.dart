@@ -457,6 +457,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   final _cloud = Supabase.instance.client;
   var portfolios = <Portfolio>[];
   var globalCategoryCaps = <String, Map<String, double>>{};
+  var bottomNavigationIndex = 0;
   var showGlobalTransactions = false;
   var showGlobalReport = true;
   var monthlyPlans = <MonthlyPlan>[];
@@ -1654,6 +1655,137 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               icons: categoryIcons,
               onCreate: createPlanTransaction,
               onSkip: skipPlanTransaction)));
+
+  Future<void> openPlans() async {
+    final initialPlanIds = monthlyPlans.map((plan) => plan.id).toSet();
+    await Navigator.push<void>(
+        context,
+        MaterialPageRoute(
+            builder: (_) => MonthlyPlansPage(
+                plans: monthlyPlans,
+                loans: loans,
+                portfolios: portfolios,
+                categories: categories,
+                icons: categoryIcons)));
+    if (!mounted) return;
+    setState(() {});
+    await save();
+    final removedIds = initialPlanIds
+        .difference(monthlyPlans.map((plan) => plan.id).toSet())
+        .toList();
+    final user = _cloud.auth.currentUser;
+    if (user != null && removedIds.isNotEmpty) {
+      await _cloud
+          .from('finance_records')
+          .update({'deleted_at': DateTime.now().toIso8601String()})
+          .eq('user_id', user.id)
+          .eq('record_type', 'plan')
+          .inFilter('record_id', removedIds);
+    }
+  }
+
+  Future<void> openLoans() async {
+    final initialLoanIds = loans.map((loan) => loan.id).toSet();
+    await Navigator.push<void>(
+        context,
+        MaterialPageRoute(
+            builder: (_) => LoansPage(loans: loans, portfolios: portfolios)));
+    if (!mounted) return;
+    setState(() {});
+    await save();
+    final removedIds = initialLoanIds
+        .difference(loans.map((loan) => loan.id).toSet())
+        .toList();
+    final user = _cloud.auth.currentUser;
+    if (user != null && removedIds.isNotEmpty) {
+      await _cloud
+          .from('finance_records')
+          .update({'deleted_at': DateTime.now().toIso8601String()})
+          .eq('user_id', user.id)
+          .eq('record_type', 'loan')
+          .inFilter('record_id', removedIds);
+    }
+  }
+
+  Future<void> openMoreMenu() async {
+    setState(() => bottomNavigationIndex = 3);
+    await showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        builder: (sheetContext) => SafeArea(
+                child: ListView(shrinkWrap: true, children: [
+              const ListTile(
+                  title: Text('More',
+                      style: TextStyle(
+                          fontSize: 20, fontWeight: FontWeight.bold))),
+              ListTile(
+                  leading: const Icon(Icons.dashboard_outlined),
+                  title: const Text('Dashboard'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    openDashboard();
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.insights_outlined),
+                  title: const Text('Spending trends'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    openTrends();
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.calendar_month_outlined),
+                  title: const Text('Bill calendar'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    openBillCalendar();
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.account_balance_wallet_outlined),
+                  title: const Text('Month projection'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    openProjection();
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.account_balance_outlined),
+                  title: const Text('Loans'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    openLoans();
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.settings_outlined),
+                  title: const Text('Settings'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    settings();
+                  })
+            ])));
+    if (mounted) setState(() => bottomNavigationIndex = 0);
+  }
+
+  Future<void> onBottomNavigationSelected(int index) async {
+    if (index == 0) {
+      setState(() => bottomNavigationIndex = 0);
+      return;
+    }
+    if (index == 1) {
+      setState(() => bottomNavigationIndex = 1);
+      await Navigator.push<void>(
+          context,
+          MaterialPageRoute(
+              builder: (_) => CategoryReportPage(
+                  portfolio: current, icons: categoryIcons)));
+    } else if (index == 2) {
+      setState(() => bottomNavigationIndex = 2);
+      await openPlans();
+    } else {
+      await openMoreMenu();
+      return;
+    }
+    if (mounted) setState(() => bottomNavigationIndex = 0);
+  }
+
   @override
   Widget build(BuildContext c) {
     if (loading)
@@ -1702,34 +1834,35 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           (a, b) => b.transaction.createdAt.compareTo(a.transaction.createdAt));
     final notices = activityNotices;
     return Scaffold(
-        appBar: AppBar(
-            title: Text(profileName.isEmpty
-                ? 'My Expensia'
-                : 'My Expensia - $profileName'),
-            actions: [
-              IconButton(
-                  tooltip: 'Dashboard',
-                  onPressed: openDashboard,
-                  icon: const Icon(Icons.dashboard_outlined)),
-              IconButton(
-                  tooltip: 'Spending trends',
-                  onPressed: openTrends,
-                  icon: const Icon(Icons.insights_outlined)),
-              IconButton(
-                  tooltip: 'Month projection',
-                  onPressed: openProjection,
-                  icon: const Icon(Icons.account_balance_wallet_outlined)),
-              IconButton(
-                  tooltip: signedIn ? 'Cloud account connected' : 'Cloud login',
-                  onPressed: connectCloud,
-                  icon: Icon(signedIn ? Icons.cloud_done : Icons.cloud_outlined,
-                      color: signedIn ? Colors.blue.shade700 : null)),
-              activityBell(notices),
-              IconButton(
-                  tooltip: 'Bill calendar',
-                  onPressed: openBillCalendar,
-                  icon: const Icon(Icons.calendar_month_outlined)),
-              IconButton(onPressed: settings, icon: const Icon(Icons.settings))
+        appBar: AppBar(title: const Text('My Expensia'), actions: [
+          IconButton(
+              tooltip: signedIn ? 'Cloud account connected' : 'Cloud login',
+              onPressed: connectCloud,
+              icon: Icon(signedIn ? Icons.cloud_done : Icons.cloud_outlined,
+                  color: signedIn ? Colors.blue.shade700 : null)),
+          activityBell(notices),
+          IconButton(onPressed: settings, icon: const Icon(Icons.settings))
+        ]),
+        bottomNavigationBar: NavigationBar(
+            selectedIndex: bottomNavigationIndex,
+            onDestinationSelected: onBottomNavigationSelected,
+            destinations: const [
+              NavigationDestination(
+                  icon: Icon(Icons.home_outlined),
+                  selectedIcon: Icon(Icons.home),
+                  label: 'Home'),
+              NavigationDestination(
+                  icon: Icon(Icons.bar_chart_outlined),
+                  selectedIcon: Icon(Icons.bar_chart),
+                  label: 'Report'),
+              NavigationDestination(
+                  icon: Icon(Icons.event_note_outlined),
+                  selectedIcon: Icon(Icons.event_note),
+                  label: 'Plans'),
+              NavigationDestination(
+                  icon: Icon(Icons.more_horiz),
+                  selectedIcon: Icon(Icons.more),
+                  label: 'More')
             ]),
         body: ListView(padding: const EdgeInsets.all(20), children: [
           DropdownButtonFormField<String>(
@@ -1845,9 +1978,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   icon: const Icon(Icons.swap_horiz),
                   label: const Text('Transfer money'))),
           const SizedBox(height: 24),
-          Row(children: [
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Transactions', style: Theme.of(c).textTheme.titleLarge),
-            const Spacer(),
+            const SizedBox(height: 8),
             SegmentedButton<bool>(
                 segments: const [
                   ButtonSegment(value: false, label: Text('This portfolio')),
