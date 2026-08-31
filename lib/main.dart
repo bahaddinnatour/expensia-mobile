@@ -487,6 +487,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           event.event == AuthChangeEvent.initialSession) syncCloud();
       if (event.event == AuthChangeEvent.signedOut && mounted)
         setState(() => cloudSynced = false);
+    }, onError: (Object _, StackTrace __) {
+      if (mounted) setState(() => cloudSynced = false);
     });
     load();
     if (_cloud.auth.currentUser != null) syncCloud();
@@ -901,11 +903,14 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Cloud sync connected.')));
       }
-    } catch (_) {
+    } catch (error) {
       if (mounted) {
         setState(() => cloudSynced = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Cloud sync could not connect.')));
+        final message = error.toString().contains('Failed host lookup')
+            ? 'Cloud sync needs a working internet connection or DNS.'
+            : 'Cloud sync could not connect.';
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(message)));
       }
     }
   }
