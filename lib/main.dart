@@ -361,6 +361,13 @@ DateTime _nextPlanOccurrence(MonthlyPlan plan, DateTime from) {
   return DateTime(from.year, from.month + 1, 1);
 }
 
+DateTime _capCycleStart(Map<String, DateTime> cycleStarts, Currency currency) {
+  final stored = cycleStarts[currency.name];
+  if (stored != null) return stored;
+  final now = DateTime.now();
+  return DateTime(now.year, now.month, 1);
+}
+
 int _comparePlans(MonthlyPlan a, MonthlyPlan b) {
   final frequency = a.frequency.index.compareTo(b.frequency.index);
   if (frequency != 0) return frequency;
@@ -473,6 +480,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   final _cloud = Supabase.instance.client;
   var portfolios = <Portfolio>[];
   var globalCategoryCaps = <String, Map<String, double>>{};
+  var capCycleStarts = <String, DateTime>{};
   var bottomNavigationIndex = 0;
   var showGlobalTransactions = false;
   var showGlobalReport = true;
@@ -693,6 +701,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               currency.toString(),
               (caps as Map).map((category, amount) =>
                   MapEntry(category.toString(), (amount as num).toDouble()))));
+      capCycleStarts = (d['capCycleStarts'] as Map? ?? {}).map(
+          (currency, value) => MapEntry(currency.toString(),
+              DateTime.tryParse(value.toString()) ?? DateTime.now()));
       if (d['capsSharedVersion'] != 2) {
         for (final portfolio in portfolios) {
           final shared = globalCategoryCaps.putIfAbsent(
@@ -743,6 +754,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           'selectedId': selected,
           'biometricEnabled': biometricEnabled,
           'globalCategoryCaps': globalCategoryCaps,
+          'capCycleStarts': capCycleStarts.map(
+              (currency, start) => MapEntry(currency, start.toIso8601String())),
           'capsSharedVersion': 2,
           'readActivityIds': readActivityIds.toList()
         }
@@ -824,6 +837,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       'categories': categories,
       'categoryIcons': categoryIcons,
       'globalCategoryCaps': globalCategoryCaps,
+      'capCycleStarts': capCycleStarts.map(
+          (currency, start) => MapEntry(currency, start.toIso8601String())),
       'capsSharedVersion': 2,
       'categoryVersion': 2,
       'selectedId': selected,
@@ -1037,7 +1052,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     final sharedCap = globalCategoryCaps[current.currency.name]?[tx.category];
     final cap = sharedCap ?? current.categoryCaps[tx.category];
     if (cap == null || cap <= 0) return true;
-    final now = tx.createdAt;
+    final cycleStart = _capCycleStart(capCycleStarts, current.currency);
     final spendingPortfolios = sharedCap == null
         ? [current]
         : portfolios
@@ -1047,8 +1062,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         .where((item) =>
             !item.inflow &&
             item.category == tx.category &&
-            item.createdAt.year == now.year &&
-            item.createdAt.month == now.month)
+            !item.createdAt.isBefore(cycleStart))
         .fold<double>(tx.amount, (sum, item) => sum + item.amount);
     if (spent < cap * .9) return true;
     final ratio = spent / cap;
@@ -1411,14 +1425,15 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 !tx.inflow &&
                 tx.transferId == null &&
                 tx.category == cap.key &&
-                tx.createdAt.year == now.year &&
-                tx.createdAt.month == now.month)
+                !tx.createdAt
+                    .isBefore(_capCycleStart(capCycleStarts, currency)))
             .fold<double>(0, (sum, tx) => sum + tx.amount);
         final ratio = spent / cap.value;
         if (ratio < .9) continue;
         notices.add(_ActivityNotice(
-            id: 'cap:${currency.name}:${cap.key}:${now.year}-${now.month}',
-            title: ratio >= 1 ? 'Monthly cap exceeded' : 'Monthly cap warning',
+            id:
+                'cap:${currency.name}:${cap.key}:${_capCycleStart(capCycleStarts, currency).toIso8601String()}',
+            title: ratio >= 1 ? 'Cap exceeded' : 'Cap warning',
             message:
                 '${cap.key}: ${(ratio * 100).toStringAsFixed(0)}% of ${currency.symbol} ${cap.value.toStringAsFixed(2)}',
             createdAt: now,
@@ -1518,7 +1533,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       context,
       MaterialPageRoute(
           builder: (_) => DashboardPage(
-              portfolios: portfolios, globalCaps: globalCategoryCaps)));
+              portfolios: portfolios,
+              globalCaps: globalCategoryCaps,
+              capCycleStarts: capCycleStarts)));
   Future<void> openTrends() => Navigator.push<void>(context,
       MaterialPageRoute(builder: (_) => TrendsPage(portfolios: portfolios)));
   Future<void> openProjection() => Navigator.push<void>(
@@ -1527,12 +1544,14 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           builder: (_) => ProjectionPage(
               portfolios: portfolios,
               plans: monthlyPlans,
-              globalCaps: globalCategoryCaps)));
+              globalCaps: globalCategoryCaps,
+              capCycleStarts: capCycleStarts)));
   Future<void> settings() async {
     Future<void> applySettings(_SettingsData data) async {
       setState(() {
         portfolios = data.portfolios;
         globalCategoryCaps = data.globalCategoryCaps;
+        capCycleStarts = data.capCycleStarts;
         selected = data.selected;
         profileName = data.name;
         email = data.email;
@@ -1559,6 +1578,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     monthlyPlans: monthlyPlans,
                     loans: loans,
                     globalCategoryCaps: globalCategoryCaps,
+                    capCycleStarts: capCycleStarts,
                     biometricEnabled: biometricEnabled),
                 cloudSignedIn: _cloud.auth.currentUser != null,
                 onCloudAccount: connectCloud,
@@ -1843,6 +1863,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               builder: (_) => CategoryReportPage(
                   portfolio: current,
                   icons: categoryIcons,
+                  capCycleStart:
+                      _capCycleStart(capCycleStarts, current.currency),
                   bottomNavigationBar: appNavigationBar(1))));
     } else if (index == 2) {
       setState(() => bottomNavigationIndex = 2);
@@ -1998,7 +2020,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                   c,
                   MaterialPageRoute(
                       builder: (_) => CategoryReportPage(
-                          portfolio: reportPortfolio, icons: categoryIcons)))),
+                          portfolio: reportPortfolio,
+                          icons: categoryIcons,
+                          capCycleStart: _capCycleStart(
+                              capCycleStarts, current.currency))))),
           const SizedBox(height: 14),
           Row(children: [
             Expanded(
@@ -2194,10 +2219,12 @@ class ProjectionPage extends StatelessWidget {
       {super.key,
       required this.portfolios,
       required this.plans,
-      required this.globalCaps});
+      required this.globalCaps,
+      required this.capCycleStarts});
   final List<Portfolio> portfolios;
   final List<MonthlyPlan> plans;
   final Map<String, Map<String, double>> globalCaps;
+  final Map<String, DateTime> capCycleStarts;
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
@@ -2216,8 +2243,8 @@ class ProjectionPage extends StatelessWidget {
             final spent = <String, double>{};
             for (final tx in portfolio.transactions.where((tx) =>
                 !tx.inflow &&
-                tx.createdAt.year == now.year &&
-                tx.createdAt.month == now.month)) {
+                !tx.createdAt.isBefore(
+                    _capCycleStart(capCycleStarts, portfolio.currency)))) {
               spent[tx.category] = (spent[tx.category] ?? 0) + tx.amount;
             }
             final caps = globalCaps[portfolio.currency.name] ??
@@ -2257,25 +2284,28 @@ class ProjectionPage extends StatelessWidget {
 
 class DashboardPage extends StatelessWidget {
   const DashboardPage(
-      {super.key, required this.portfolios, required this.globalCaps});
+      {super.key,
+      required this.portfolios,
+      required this.globalCaps,
+      required this.capCycleStarts});
   final List<Portfolio> portfolios;
   final Map<String, Map<String, double>> globalCaps;
+  final Map<String, DateTime> capCycleStarts;
 
   @override
   Widget build(BuildContext context) {
-    final now = DateTime.now();
     return Scaffold(
         appBar: AppBar(title: const Text('Dashboard')),
         body: ListView(padding: const EdgeInsets.all(20), children: [
-          const Text('This month by portfolio.',
+          const Text('Current cap cycle by portfolio.',
               style: TextStyle(color: Colors.blueGrey)),
           const SizedBox(height: 12),
           ...portfolios.map((portfolio) {
             final transactions = portfolio.transactions
                 .where((transaction) =>
                     transaction.transferId == null &&
-                    transaction.createdAt.year == now.year &&
-                    transaction.createdAt.month == now.month)
+                    !transaction.createdAt.isBefore(
+                        _capCycleStart(capCycleStarts, portfolio.currency)))
                 .toList();
             final inflow = transactions
                 .where((transaction) => transaction.inflow)
@@ -2379,7 +2409,7 @@ class DashboardPage extends StatelessWidget {
                           const SizedBox(height: 6),
                           if (alerts.isEmpty)
                             const Text(
-                                'No category is at 90% of its monthly cap.',
+                                'No category is at 90% of its current cap.',
                                 style: TextStyle(color: Colors.blueGrey)),
                           ...alerts.map((alert) => Container(
                               width: double.infinity,
@@ -2399,7 +2429,7 @@ class DashboardPage extends StatelessWidget {
                                         style: const TextStyle(
                                             fontWeight: FontWeight.bold)),
                                     Text(
-                                        '${portfolio.currency.symbol} ${alert.spent.toStringAsFixed(2)} of ${portfolio.currency.symbol} ${alert.cap.toStringAsFixed(2)} monthly cap')
+                                        '${portfolio.currency.symbol} ${alert.spent.toStringAsFixed(2)} of ${portfolio.currency.symbol} ${alert.cap.toStringAsFixed(2)} cap')
                                   ])))
                         ])));
           })
@@ -2499,9 +2529,11 @@ class CategoryReportPage extends StatelessWidget {
       {super.key,
       required this.portfolio,
       required this.icons,
+      required this.capCycleStart,
       this.bottomNavigationBar});
   final Portfolio portfolio;
   final Map<String, int> icons;
+  final DateTime capCycleStart;
   final Widget? bottomNavigationBar;
   @override
   Widget build(BuildContext context) {
@@ -2514,7 +2546,6 @@ class CategoryReportPage extends StatelessWidget {
     final entries = totals.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
     final total = entries.fold<double>(0, (sum, entry) => sum + entry.value);
-    final now = DateTime.now();
     return Scaffold(
         appBar: AppBar(title: Text('${portfolio.name} report')),
         bottomNavigationBar: bottomNavigationBar,
@@ -2547,8 +2578,7 @@ class CategoryReportPage extends StatelessWidget {
                           !tx.inflow &&
                           tx.transferId == null &&
                           tx.category == entry.key &&
-                          tx.createdAt.year == now.year &&
-                          tx.createdAt.month == now.month)
+                          !tx.createdAt.isBefore(capCycleStart))
                       .fold<double>(0, (sum, tx) => sum + tx.amount);
                   final cap = portfolio.categoryCaps[entry.key];
                   final capRatio = cap == null ? 0.0 : monthlyUsed / cap;
@@ -2604,7 +2634,7 @@ class CategoryReportPage extends StatelessWidget {
                                     Text(
                                         cap == null
                                             ? '${(portion * 100).toStringAsFixed(1)}% of outflow - tap for transactions'
-                                            : 'This month: ${portfolio.currency.symbol} ${monthlyUsed.toStringAsFixed(2)} / ${portfolio.currency.symbol} ${cap.toStringAsFixed(2)} (${(monthlyUsed / cap * 100).toStringAsFixed(1)}% used) - tap for transactions',
+                                            : 'Current cap: ${portfolio.currency.symbol} ${monthlyUsed.toStringAsFixed(2)} / ${portfolio.currency.symbol} ${cap.toStringAsFixed(2)} (${(monthlyUsed / cap * 100).toStringAsFixed(1)}% used) - tap for transactions',
                                         style: Theme.of(context)
                                             .textTheme
                                             .bodySmall)
@@ -2689,6 +2719,7 @@ class _SettingsData {
       required this.monthlyPlans,
       required this.loans,
       required this.globalCategoryCaps,
+      required this.capCycleStarts,
       required this.biometricEnabled});
   final List<Portfolio> portfolios;
   final String selected, name, email;
@@ -2697,6 +2728,7 @@ class _SettingsData {
   final List<MonthlyPlan> monthlyPlans;
   final List<Loan> loans;
   final Map<String, Map<String, double>> globalCategoryCaps;
+  final Map<String, DateTime> capCycleStarts;
   final bool biometricEnabled;
 }
 
@@ -2726,6 +2758,7 @@ class _SettingsState extends State<Settings> {
   late List<MonthlyPlan> monthlyPlans;
   late List<Loan> loans;
   late Map<String, Map<String, double>> globalCategoryCaps;
+  late Map<String, DateTime> capCycleStarts;
   late bool biometricEnabled;
   var backupsOpen = false;
   @override
@@ -2750,6 +2783,7 @@ class _SettingsState extends State<Settings> {
     loans = [...widget.data.loans];
     globalCategoryCaps = widget.data.globalCategoryCaps
         .map((currency, caps) => MapEntry(currency, {...caps}));
+    capCycleStarts = {...widget.data.capCycleStarts};
     biometricEnabled = widget.data.biometricEnabled;
     name = TextEditingController(text: widget.data.name);
     email = TextEditingController(text: widget.data.email);
@@ -3076,6 +3110,7 @@ class _SettingsState extends State<Settings> {
         monthlyPlans: monthlyPlans,
         loans: loans,
         globalCategoryCaps: globalCategoryCaps,
+        capCycleStarts: capCycleStarts,
         biometricEnabled: biometricEnabled));
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -3131,6 +3166,7 @@ class _SettingsState extends State<Settings> {
         monthlyPlans: monthlyPlans,
         loans: loans,
         globalCategoryCaps: globalCategoryCaps,
+        capCycleStarts: capCycleStarts,
         biometricEnabled: biometricEnabled));
     await archiveSharedRecords('portfolio', [portfolio.id]);
     await archiveSharedRecords('transaction', transactionIds);
@@ -3266,7 +3302,8 @@ class _SettingsState extends State<Settings> {
                 initialSelected: selected,
                 categories: categories,
                 icons: categoryIcons,
-                globalCaps: globalCategoryCaps)));
+                globalCaps: globalCategoryCaps,
+                capCycleStarts: capCycleStarts)));
     setState(() {});
   }
 
@@ -3282,6 +3319,7 @@ class _SettingsState extends State<Settings> {
           monthlyPlans: monthlyPlans,
           loans: loans,
           globalCategoryCaps: globalCategoryCaps,
+          capCycleStarts: capCycleStarts,
           biometricEnabled: biometricEnabled));
   @override
   Widget build(BuildContext c) => PopScope(
@@ -4455,12 +4493,14 @@ class MonthlyCapsPage extends StatefulWidget {
       required this.initialSelected,
       required this.categories,
       required this.icons,
-      required this.globalCaps});
+      required this.globalCaps,
+      required this.capCycleStarts});
   final List<Portfolio> portfolios;
   final String initialSelected;
   final List<String> categories;
   final Map<String, int> icons;
   final Map<String, Map<String, double>> globalCaps;
+  final Map<String, DateTime> capCycleStarts;
   @override
   State<MonthlyCapsPage> createState() => _MonthlyCapsPageState();
 }
@@ -4479,6 +4519,30 @@ class _MonthlyCapsPageState extends State<MonthlyCapsPage> {
   Map<String, double> get caps => shared
       ? widget.globalCaps.putIfAbsent(portfolio.currency.name, () => {})
       : portfolio.categoryCaps;
+  DateTime get cycleStart =>
+      _capCycleStart(widget.capCycleStarts, portfolio.currency);
+
+  Future<void> resetCapUsage() async {
+    final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: Text('Reset ${portfolio.currency.nameLabel} cap usage?'),
+                content: const Text(
+                    'Expenses before now will stay in history but will no longer count toward the current cap cycle. This cannot be undone.'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Reset cap usage'))
+                ]));
+    if (confirmed == true) {
+      setState(() =>
+          widget.capCycleStarts[portfolio.currency.name] = DateTime.now());
+    }
+  }
+
   Future<void> editCap(String category) async {
     final amount =
         TextEditingController(text: caps[category]?.toStringAsFixed(2) ?? '');
@@ -4546,8 +4610,13 @@ class _MonthlyCapsPageState extends State<MonthlyCapsPage> {
             style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 4),
         Text(shared
-            ? 'Caps are shared by all ${portfolio.currency.nameLabel} portfolios and reset on the 1st of every month.'
-            : 'Caps apply only to ${portfolio.name} and reset on the 1st of every month.'),
+            ? 'Caps are shared by all ${portfolio.currency.nameLabel} portfolios. Usage is reset manually after salary.'
+            : 'Caps apply only to ${portfolio.name}. Usage is reset manually after salary.'),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+            onPressed: resetCapUsage,
+            icon: const Icon(Icons.restart_alt),
+            label: Text('Reset cap usage (${_shortDateTime(cycleStart)})')),
         const SizedBox(height: 16),
         ...widget.categories.map((category) {
           final cap = caps[category];
