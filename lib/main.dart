@@ -364,8 +364,9 @@ DateTime _nextPlanOccurrence(MonthlyPlan plan, DateTime from) {
 DateTime _capCycleStart(Map<String, DateTime> cycleStarts, Currency currency) {
   final stored = cycleStarts[currency.name];
   if (stored != null) return stored;
-  final now = DateTime.now();
-  return DateTime(now.year, now.month, 1);
+  // A cap cycle begins only when the user explicitly resets it. Until then,
+  // preserve all recorded spending in the usage total.
+  return DateTime.fromMillisecondsSinceEpoch(0);
 }
 
 int _comparePlans(MonthlyPlan a, MonthlyPlan b) {
@@ -4521,6 +4522,8 @@ class _MonthlyCapsPageState extends State<MonthlyCapsPage> {
       : portfolio.categoryCaps;
   DateTime get cycleStart =>
       _capCycleStart(widget.capCycleStarts, portfolio.currency);
+  bool get hasManualCycleStart =>
+      widget.capCycleStarts.containsKey(portfolio.currency.name);
 
   Future<void> resetCapUsage() async {
     final confirmed = await showDialog<bool>(
@@ -4616,7 +4619,9 @@ class _MonthlyCapsPageState extends State<MonthlyCapsPage> {
         OutlinedButton.icon(
             onPressed: resetCapUsage,
             icon: const Icon(Icons.restart_alt),
-            label: Text('Reset cap usage (${_shortDateTime(cycleStart)})')),
+            label: Text(hasManualCycleStart
+                ? 'Reset cap usage (started ${_shortDateTime(cycleStart)})'
+                : 'Reset cap usage (all recorded expenses included)')),
         const SizedBox(height: 16),
         ...widget.categories.map((category) {
           final cap = caps[category];
