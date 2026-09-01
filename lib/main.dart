@@ -149,7 +149,9 @@ class PlanReminderService {
 bool _planCreatedInMonth(
     MonthlyPlan plan, List<Portfolio> portfolios, DateTime date) {
   final period = _planPeriodKey(plan, date);
-  if (plan.lastCreatedMonth == period || plan.lastSkippedMonth == period) {
+  if (plan.lastCreatedMonth == period ||
+      plan.lastSkippedMonth == period ||
+      plan.paidEarlyPeriods.contains(period)) {
     return true;
   }
   final matches = portfolios.where((item) => item.id == plan.portfolioId);
@@ -275,7 +277,8 @@ class MonthlyPlan {
       this.anchorMonth = 1,
       this.loanId,
       this.lastCreatedMonth,
-      this.lastSkippedMonth});
+      this.lastSkippedMonth,
+      this.paidEarlyPeriods = const []});
   final String id, description, category, portfolioId;
   final double amount;
   final int dueDay;
@@ -286,6 +289,7 @@ class MonthlyPlan {
       loanId,
       lastCreatedMonth,
       lastSkippedMonth;
+  final List<String> paidEarlyPeriods;
   Map<String, dynamic> json() => {
         'id': id,
         'description': description,
@@ -300,7 +304,8 @@ class MonthlyPlan {
         'anchorMonth': anchorMonth,
         'loanId': loanId,
         'lastCreatedMonth': lastCreatedMonth,
-        'lastSkippedMonth': lastSkippedMonth
+        'lastSkippedMonth': lastSkippedMonth,
+        'paidEarlyPeriods': paidEarlyPeriods
       };
   factory MonthlyPlan.fromJson(Map<String, dynamic> x) => MonthlyPlan(
       id: x['id'],
@@ -318,7 +323,10 @@ class MonthlyPlan {
       anchorMonth: (x['anchorMonth'] as num? ?? 1).toInt().clamp(1, 12).toInt(),
       loanId: x['loanId'],
       lastCreatedMonth: x['lastCreatedMonth'],
-      lastSkippedMonth: x['lastSkippedMonth']);
+      lastSkippedMonth: x['lastSkippedMonth'],
+      paidEarlyPeriods: (x['paidEarlyPeriods'] as List? ?? [])
+          .map((period) => period.toString())
+          .toList());
 }
 
 enum PlanFrequency { monthly, semiAnnual, annual }
@@ -343,6 +351,14 @@ bool _planOccursInMonth(MonthlyPlan plan, DateTime date) {
 String _planPeriodKey(MonthlyPlan plan, DateTime date) {
   if (plan.frequency == PlanFrequency.annual) return '${date.year}';
   return '${date.year}-${date.month.toString().padLeft(2, '0')}';
+}
+
+DateTime _nextPlanOccurrence(MonthlyPlan plan, DateTime from) {
+  for (var offset = 1; offset <= 24; offset++) {
+    final candidate = DateTime(from.year, from.month + offset, 1);
+    if (_planOccursInMonth(plan, candidate)) return candidate;
+  }
+  return DateTime(from.year, from.month + 1, 1);
 }
 
 int _comparePlans(MonthlyPlan a, MonthlyPlan b) {
@@ -595,7 +611,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           anchorMonth: plan.anchorMonth,
           loanId: plan.loanId,
           lastCreatedMonth: plan.lastCreatedMonth,
-          lastSkippedMonth: plan.lastSkippedMonth);
+          lastSkippedMonth: plan.lastSkippedMonth,
+          paidEarlyPeriods: plan.paidEarlyPeriods);
     }).toList();
   }
 
@@ -627,7 +644,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           anchorMonth: plan.anchorMonth,
           loanId: plan.loanId,
           lastCreatedMonth: plan.lastCreatedMonth,
-          lastSkippedMonth: plan.lastSkippedMonth);
+          lastSkippedMonth: plan.lastSkippedMonth,
+          paidEarlyPeriods: plan.paidEarlyPeriods);
     }).toList();
   }
 
@@ -641,10 +659,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         await _prefs.remove('my_expensia_state_v1');
       }
     }
-    var needsStarterPlans = false;
-    var needsCategoryUpgrade = false;
     var needsSharedCapsMigration = false;
-    var needsPlanDeduplication = false;
     if (raw != null) {
       final d = jsonDecode(raw) as Map<String, dynamic>;
       profileName = d['name'] ?? '';
@@ -695,34 +710,21 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           .map((x) => MonthlyPlan.fromJson(x))
           .toList();
       loans = (d['loans'] as List? ?? []).map((x) => Loan.fromJson(x)).toList();
-      // Older snapshots do not have this marker, but may already contain
-      // user-managed plans. Seed only an actually empty plan list.
-      needsStarterPlans =
-          monthlyPlans.isEmpty && d['monthlyPlansSeeded'] != true;
-      needsPlanDeduplication = deduplicateMonthlyPlans();
-      needsCategoryUpgrade = d['monthlyPlanCategoryVersion'] != 2;
       selected = d['selectedId'] ?? portfolios.first.id;
     }
     if (portfolios.isEmpty) {
       portfolios = [Portfolio(id: 'default', name: 'My portfolio')];
       selected = 'default';
-      needsStarterPlans = true;
     }
     if (!portfolios.any((portfolio) => portfolio.id == selected)) {
       selected = portfolios.first.id;
     }
-    if (needsStarterPlans) seedMonthlyPlans();
-    if (needsCategoryUpgrade) upgradeStarterPlanCategories();
-    repairMonthlyPlanReferences();
     if (mounted)
       setState(() {
         loading = false;
         locked = biometricEnabled;
       });
-    if (needsStarterPlans ||
-        needsCategoryUpgrade ||
-        needsSharedCapsMigration ||
-        needsPlanDeduplication) {
+    if (needsSharedCapsMigration) {
       await save();
     } else {
       await _reminders.schedule(monthlyPlans, portfolios);
@@ -1620,7 +1622,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             anchorMonth: plan.anchorMonth,
             loanId: plan.loanId,
             lastCreatedMonth: month,
-            lastSkippedMonth: null);
+            lastSkippedMonth: null,
+            paidEarlyPeriods: plan.paidEarlyPeriods);
     });
     save();
   }
@@ -1645,7 +1648,36 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           anchorMonth: plan.anchorMonth,
           loanId: plan.loanId,
           lastCreatedMonth: null,
-          lastSkippedMonth: month);
+          lastSkippedMonth: month,
+          paidEarlyPeriods: plan.paidEarlyPeriods);
+    });
+    save();
+  }
+
+  void markPlanPaidEarly(MonthlyPlan plan) {
+    final period =
+        _planPeriodKey(plan, _nextPlanOccurrence(plan, DateTime.now()));
+    setState(() {
+      final index = monthlyPlans.indexWhere((item) => item.id == plan.id);
+      if (index < 0 || monthlyPlans[index].paidEarlyPeriods.contains(period)) {
+        return;
+      }
+      monthlyPlans[index] = MonthlyPlan(
+          id: plan.id,
+          description: plan.description,
+          category: plan.category,
+          amount: plan.amount,
+          dueDay: plan.dueDay,
+          portfolioId: plan.portfolioId,
+          savingsTransfer: plan.savingsTransfer,
+          destinationPortfolioId: plan.destinationPortfolioId,
+          recurring: plan.recurring,
+          frequency: plan.frequency,
+          anchorMonth: plan.anchorMonth,
+          loanId: plan.loanId,
+          lastCreatedMonth: plan.lastCreatedMonth,
+          lastSkippedMonth: plan.lastSkippedMonth,
+          paidEarlyPeriods: [...plan.paidEarlyPeriods, period]);
     });
     save();
   }
@@ -1659,7 +1691,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               portfolios: portfolios,
               icons: categoryIcons,
               onCreate: createPlanTransaction,
-              onSkip: skipPlanTransaction)));
+              onSkip: skipPlanTransaction,
+              onPayEarly: markPlanPaidEarly)));
 
   Future<void> openPlans({bool keepNavigation = false}) async {
     final initialPlanIds = monthlyPlans.map((plan) => plan.id).toSet();
@@ -3027,7 +3060,10 @@ class _SettingsState extends State<Settings> {
                   recurring: plan.recurring,
                   frequency: plan.frequency,
                   anchorMonth: plan.anchorMonth,
-                  loanId: plan.loanId))
+                  loanId: plan.loanId,
+                  lastCreatedMonth: plan.lastCreatedMonth,
+                  lastSkippedMonth: plan.lastSkippedMonth,
+                  paidEarlyPeriods: plan.paidEarlyPeriods))
           .toList();
     });
     await widget.onSave(_SettingsData(
@@ -3613,7 +3649,9 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
               recurring: plan.recurring,
               frequency: plan.frequency,
               anchorMonth: plan.anchorMonth,
-              loanId: plan.loanId);
+              loanId: plan.loanId,
+              lastSkippedMonth: plan.lastSkippedMonth,
+              paidEarlyPeriods: plan.paidEarlyPeriods);
         }
       }
     });
@@ -3698,13 +3736,15 @@ class PlanTransactionsPage extends StatefulWidget {
       required this.portfolios,
       required this.icons,
       required this.onCreate,
-      required this.onSkip});
+      required this.onSkip,
+      required this.onPayEarly});
   final List<MonthlyPlan> plans;
   final List<Loan> loans;
   final List<Portfolio> portfolios;
   final Map<String, int> icons;
   final void Function(MonthlyPlan) onCreate;
   final void Function(MonthlyPlan) onSkip;
+  final void Function(MonthlyPlan) onPayEarly;
   @override
   State<PlanTransactionsPage> createState() => _PlanTransactionsPageState();
 }
@@ -3719,6 +3759,7 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
     final source = portfolio(plan.portfolioId);
     return plan.lastCreatedMonth == month ||
         plan.lastSkippedMonth == month ||
+        plan.paidEarlyPeriods.contains(month) ||
         source.transactions.any((tx) =>
             !tx.inflow &&
             tx.description == plan.description &&
@@ -3756,6 +3797,29 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('${plan.description} skipped this month.')));
     }
+  }
+
+  Future<void> payEarly(MonthlyPlan plan) async {
+    final target = _nextPlanOccurrence(plan, DateTime.now());
+    final period = _planPeriodKey(plan, target);
+    if (plan.paidEarlyPeriods.contains(period)) return;
+    final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: Text('Mark ${plan.description} paid early?'),
+                content: Text(
+                    'This marks the $period billing period as paid without creating a transaction or changing its payment date.'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Mark paid early'))
+                ]));
+    if (confirmed != true) return;
+    widget.onPayEarly(plan);
+    setState(() {});
   }
 
   @override
@@ -3880,6 +3944,10 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                   final isCreated = createdThisMonth(plan, now);
                   final isSkipped =
                       plan.lastSkippedMonth == _planPeriodKey(plan, now);
+                  final nextPeriod =
+                      _planPeriodKey(plan, _nextPlanOccurrence(plan, now));
+                  final isNextPeriodPaid =
+                      plan.paidEarlyPeriods.contains(nextPeriod);
                   return Card(
                       child: Padding(
                     padding: const EdgeInsets.all(14),
@@ -3906,31 +3974,42 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                           const SizedBox(height: 10),
                           Align(
                               alignment: Alignment.centerRight,
-                              child: isCreated
-                                  ? FilledButton.icon(
-                                      onPressed: null,
-                                      icon: Icon(isSkipped
-                                          ? Icons.skip_next_outlined
-                                          : Icons.check),
-                                      label: Text(!_planOccursInMonth(plan, now)
-                                          ? 'Not due this month'
-                                          : isSkipped
-                                              ? 'Skipped this period'
-                                              : 'Created this period'))
-                                  : Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        OutlinedButton(
-                                            onPressed: () => skip(plan),
-                                            child:
-                                                const Text('Skip this month')),
-                                        const SizedBox(width: 8),
-                                        FilledButton.icon(
-                                            onPressed: () => create(plan),
-                                            icon: const Icon(Icons.play_arrow),
-                                            label: const Text('Create now'))
-                                      ],
-                                    )),
+                              child: Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  alignment: WrapAlignment.end,
+                                  children: [
+                                    OutlinedButton.icon(
+                                        onPressed: isNextPeriodPaid
+                                            ? null
+                                            : () => payEarly(plan),
+                                        icon: const Icon(
+                                            Icons.event_available_outlined),
+                                        label: Text(isNextPeriodPaid
+                                            ? 'Next period paid'
+                                            : 'Pay early')),
+                                    if (isCreated)
+                                      FilledButton.icon(
+                                          onPressed: null,
+                                          icon: Icon(isSkipped
+                                              ? Icons.skip_next_outlined
+                                              : Icons.check),
+                                          label: Text(
+                                              !_planOccursInMonth(plan, now)
+                                                  ? 'Not due this month'
+                                                  : isSkipped
+                                                      ? 'Skipped this period'
+                                                      : 'Created this period'))
+                                    else ...[
+                                      OutlinedButton(
+                                          onPressed: () => skip(plan),
+                                          child: const Text('Skip this month')),
+                                      FilledButton.icon(
+                                          onPressed: () => create(plan),
+                                          icon: const Icon(Icons.play_arrow),
+                                          label: const Text('Create now'))
+                                    ]
+                                  ])),
                         ]),
                   ));
                 }),
@@ -4295,7 +4374,10 @@ class _MonthlyPlansPageState extends State<MonthlyPlansPage> {
                                       lastCreatedMonth:
                                           existing?.lastCreatedMonth,
                                       lastSkippedMonth:
-                                          existing?.lastSkippedMonth));
+                                          existing?.lastSkippedMonth,
+                                      paidEarlyPeriods:
+                                          existing?.paidEarlyPeriods ??
+                                              const []));
                           },
                           child: const Text('Save'))
                     ])));
