@@ -1864,6 +1864,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               builder: (_) => CategoryReportPage(
                   portfolio: current,
                   icons: categoryIcons,
+                  sourcePortfolioNames: {
+                    for (final tx in current.transactions) tx.id: current.name
+                  },
                   capCycleStart:
                       _capCycleStart(capCycleStarts, current.currency),
                   bottomNavigationBar: appNavigationBar(1))));
@@ -1914,6 +1917,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 .expand((portfolio) => portfolio.transactions)
                 .toList())
         : current;
+    final reportSourcePortfolioNames = {
+      for (final portfolio in reportPortfolios)
+        for (final tx in portfolio.transactions) tx.id: portfolio.name
+    };
     final recentTransactions = (showGlobalTransactions
             ? portfolios.expand((portfolio) => portfolio.transactions.map(
                 (transaction) =>
@@ -2023,6 +2030,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                       builder: (_) => CategoryReportPage(
                           portfolio: reportPortfolio,
                           icons: categoryIcons,
+                          sourcePortfolioNames: reportSourcePortfolioNames,
                           capCycleStart: _capCycleStart(
                               capCycleStarts, current.currency))))),
           const SizedBox(height: 14),
@@ -2530,10 +2538,12 @@ class CategoryReportPage extends StatelessWidget {
       {super.key,
       required this.portfolio,
       required this.icons,
+      required this.sourcePortfolioNames,
       required this.capCycleStart,
       this.bottomNavigationBar});
   final Portfolio portfolio;
   final Map<String, int> icons;
+  final Map<String, String> sourcePortfolioNames;
   final DateTime capCycleStart;
   final Widget? bottomNavigationBar;
   @override
@@ -2598,7 +2608,9 @@ class CategoryReportPage extends StatelessWidget {
                                   builder: (_) => CategoryTransactionsPage(
                                       portfolio: portfolio,
                                       category: entry.key,
-                                      icons: icons))),
+                                      icons: icons,
+                                      sourcePortfolioNames:
+                                          sourcePortfolioNames))),
                           borderRadius: BorderRadius.circular(12),
                           child: Padding(
                               padding: const EdgeInsets.all(16),
@@ -2650,10 +2662,12 @@ class CategoryTransactionsPage extends StatelessWidget {
       {super.key,
       required this.portfolio,
       required this.category,
-      required this.icons});
+      required this.icons,
+      required this.sourcePortfolioNames});
   final Portfolio portfolio;
   final String category;
   final Map<String, int> icons;
+  final Map<String, String> sourcePortfolioNames;
   void details(BuildContext context, Tx tx) => showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2666,7 +2680,8 @@ class CategoryTransactionsPage extends StatelessWidget {
                         style: const TextStyle(
                             fontSize: 20, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 16),
-                    Text('Portfolio: ${portfolio.name}'),
+                    Text(
+                        'Portfolio: ${sourcePortfolioNames[tx.id] ?? portfolio.name}'),
                     Text('Category: ${tx.category}'),
                     Text(
                         'Amount: ${portfolio.currency.symbol} ${tx.amount.toStringAsFixed(2)}'),
@@ -2692,7 +2707,9 @@ class CategoryTransactionsPage extends StatelessWidget {
               style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 4),
           Text(
-              '${transactions.length} outflow transaction${transactions.length == 1 ? '' : 's'}'),
+              '${transactions.length} related outflow transaction${transactions.length == 1 ? '' : 's'}'),
+          const SizedBox(height: 4),
+          const Text('Tap a transaction to view its details.'),
           const SizedBox(height: 14),
           ...transactions.map((tx) => Card(
               child: ListTile(
@@ -2700,7 +2717,8 @@ class CategoryTransactionsPage extends StatelessWidget {
                   leading:
                       CircleAvatar(child: Icon(_categoryIcon(category, icons))),
                   title: Text(tx.description),
-                  subtitle: Text(_shortDateTime(tx.createdAt)),
+                  subtitle: Text(
+                      '${sourcePortfolioNames[tx.id] ?? portfolio.name} - ${_shortDateTime(tx.createdAt)}'),
                   trailing: Text(
                       '-${portfolio.currency.symbol} ${tx.amount.toStringAsFixed(2)}',
                       style: const TextStyle(
