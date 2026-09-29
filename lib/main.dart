@@ -1953,6 +1953,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       for (final portfolio in reportPortfolios)
         for (final tx in portfolio.transactions) tx.id: portfolio.name
     };
+    final reportCycleStart = _capCycleStart(capCycleStarts, current.currency);
+    final reportCycleTransactions = reportPortfolio.transactions
+        .where((tx) =>
+            tx.transferId == null && !tx.createdAt.isBefore(reportCycleStart))
+        .toList();
     final recentTransactions = (showGlobalTransactions
             ? portfolios.expand((portfolio) => portfolio.transactions.map(
                 (transaction) =>
@@ -2049,10 +2054,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           ]),
           const SizedBox(height: 8),
           _ReportGraph(
-              inflow: reportPortfolio.transactions
+              inflow: reportCycleTransactions
                   .where((tx) => tx.inflow && tx.transferId == null)
                   .fold(0, (sum, tx) => sum + tx.amount),
-              outflow: reportPortfolio.transactions
+              outflow: reportCycleTransactions
                   .where((tx) => !tx.inflow && tx.transferId == null)
                   .fold(0, (sum, tx) => sum + tx.amount),
               currency: current.currency,
@@ -2063,8 +2068,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                           portfolio: reportPortfolio,
                           icons: categoryIcons,
                           sourcePortfolioNames: reportSourcePortfolioNames,
-                          capCycleStart: _capCycleStart(
-                              capCycleStarts, current.currency))))),
+                          capCycleStart: reportCycleStart)))),
           const SizedBox(height: 14),
           Row(children: [
             Expanded(
@@ -2581,8 +2585,10 @@ class CategoryReportPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final totals = <String, double>{};
-    for (final tx in portfolio.transactions
-        .where((tx) => !tx.inflow && tx.transferId == null)) {
+    for (final tx in portfolio.transactions.where((tx) =>
+        !tx.inflow &&
+        tx.transferId == null &&
+        !tx.createdAt.isBefore(capCycleStart))) {
       totals.update(tx.category, (amount) => amount + tx.amount,
           ifAbsent: () => tx.amount);
     }
@@ -2598,7 +2604,7 @@ class CategoryReportPage extends StatelessWidget {
                 Text('Category outflow',
                     style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 4),
-                Text('All recorded outflows in ${portfolio.name}'),
+                Text('Current cap-cycle outflows in ${portfolio.name}'),
                 const SizedBox(height: 16),
                 Card(
                     child: Padding(
@@ -2616,13 +2622,7 @@ class CategoryReportPage extends StatelessWidget {
                 const SizedBox(height: 12),
                 ...entries.map((entry) {
                   final portion = total == 0 ? 0.0 : entry.value / total;
-                  final monthlyUsed = portfolio.transactions
-                      .where((tx) =>
-                          !tx.inflow &&
-                          tx.transferId == null &&
-                          tx.category == entry.key &&
-                          !tx.createdAt.isBefore(capCycleStart))
-                      .fold<double>(0, (sum, tx) => sum + tx.amount);
+                  final monthlyUsed = entry.value;
                   final cap = portfolio.categoryCaps[entry.key];
                   final capRatio = cap == null ? 0.0 : monthlyUsed / cap;
                   final barValue = cap == null
@@ -2642,7 +2642,8 @@ class CategoryReportPage extends StatelessWidget {
                                       category: entry.key,
                                       icons: icons,
                                       sourcePortfolioNames:
-                                          sourcePortfolioNames))),
+                                          sourcePortfolioNames,
+                                      capCycleStart: capCycleStart))),
                           borderRadius: BorderRadius.circular(12),
                           child: Padding(
                               padding: const EdgeInsets.all(16),
@@ -2695,11 +2696,13 @@ class CategoryTransactionsPage extends StatelessWidget {
       required this.portfolio,
       required this.category,
       required this.icons,
-      required this.sourcePortfolioNames});
+      required this.sourcePortfolioNames,
+      required this.capCycleStart});
   final Portfolio portfolio;
   final String category;
   final Map<String, int> icons;
   final Map<String, String> sourcePortfolioNames;
+  final DateTime capCycleStart;
   void details(BuildContext context, Tx tx) => showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2729,13 +2732,16 @@ class CategoryTransactionsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final transactions = portfolio.transactions
         .where((tx) =>
-            !tx.inflow && tx.transferId == null && tx.category == category)
+            !tx.inflow &&
+            tx.transferId == null &&
+            tx.category == category &&
+            !tx.createdAt.isBefore(capCycleStart))
         .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return Scaffold(
         appBar: AppBar(title: Text(category)),
         body: ListView(padding: const EdgeInsets.all(20), children: [
-          Text('Transaction history',
+          Text('Current cap-cycle transactions',
               style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 4),
           Text(
@@ -4668,6 +4674,20 @@ class _MonthlyCapsPageState extends State<MonthlyCapsPage> {
       });
   }
 
+  Widget capTile(String category) {
+    final cap = caps[category];
+    return Card(
+        child: ListTile(
+            onTap: () => editCap(category),
+            leading: CircleAvatar(
+                child: Icon(_categoryIcon(category, widget.icons))),
+            title: Text(category),
+            subtitle: Text(cap == null
+                ? 'No cap set'
+                : '${portfolio.currency.symbol} ${cap.toStringAsFixed(2)} per month'),
+            trailing: const Icon(Icons.edit_outlined)));
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
       appBar: AppBar(title: const Text('Monthly category caps')),
@@ -4724,23 +4744,29 @@ class _MonthlyCapsPageState extends State<MonthlyCapsPage> {
                 .map((tx) => tx.category)
           }.where((category) => category.trim().isNotEmpty).toList()
             ..sort();
+          final defined = capCategories
+              .where((category) => (caps[category] ?? 0) > 0)
+              .toList();
+          final other = capCategories
+              .where((category) => !defined.contains(category))
+              .toList();
           return [
             const Text(
-                'Every category with a configured cap or current-cycle spending is shown below.'),
+                'Configured caps are grouped separately. Other categories include current-cycle spending and can be capped when needed.'),
             const SizedBox(height: 8),
-            ...capCategories.map((category) {
-              final cap = caps[category];
-              return Card(
-                  child: ListTile(
-                      onTap: () => editCap(category),
-                      leading: CircleAvatar(
-                          child: Icon(_categoryIcon(category, widget.icons))),
-                      title: Text(category),
-                      subtitle: Text(cap == null
-                          ? 'No cap set'
-                          : '${portfolio.currency.symbol} ${cap.toStringAsFixed(2)} per month'),
-                      trailing: const Icon(Icons.edit_outlined)));
-            })
+            if (defined.isNotEmpty) ...[
+              const Text('DEFINED CAPS',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              ...defined.map(capTile)
+            ],
+            if (other.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Text('OTHER CATEGORIES',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              ...other.map(capTile)
+            ]
           ];
         })()
       ]));
