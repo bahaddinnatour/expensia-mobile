@@ -1675,13 +1675,45 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     save();
   }
 
-  void markPlanPaidEarly(MonthlyPlan plan) {
-    final period =
-        _planPeriodKey(plan, _nextPlanOccurrence(plan, DateTime.now()));
+  void payPlanEarly(MonthlyPlan plan) {
+    final now = DateTime.now();
+    final period = _planPeriodKey(plan, _nextPlanOccurrence(plan, now));
+    final source = portfolios.firstWhere((item) => item.id == plan.portfolioId,
+        orElse: () => portfolios.firstWhere((item) => item.id == selected,
+            orElse: () => portfolios.first));
+    final transferId = 'transfer_${now.microsecondsSinceEpoch}';
     setState(() {
       final index = monthlyPlans.indexWhere((item) => item.id == plan.id);
       if (index < 0 || monthlyPlans[index].paidEarlyPeriods.contains(period)) {
         return;
+      }
+      source.transactions.insert(
+          0,
+          Tx(
+              id: '${now.microsecondsSinceEpoch}_out',
+              description: plan.description,
+              category: plan.category,
+              amount: plan.amount,
+              inflow: false,
+              createdAt: now,
+              transferId: plan.savingsTransfer ? transferId : null,
+              loanId: plan.loanId));
+      if (plan.savingsTransfer &&
+          plan.destinationPortfolioId != null &&
+          plan.destinationPortfolioId != source.id) {
+        portfolios
+            .firstWhere((item) => item.id == plan.destinationPortfolioId)
+            .transactions
+            .insert(
+                0,
+                Tx(
+                    id: '${now.microsecondsSinceEpoch}_in',
+                    description: plan.description,
+                    category: plan.category,
+                    amount: plan.amount,
+                    inflow: true,
+                    createdAt: now,
+                    transferId: transferId));
       }
       monthlyPlans[index] = MonthlyPlan(
           id: plan.id,
@@ -1713,7 +1745,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               icons: categoryIcons,
               onCreate: createPlanTransaction,
               onSkip: skipPlanTransaction,
-              onPayEarly: markPlanPaidEarly)));
+              onPayEarly: payPlanEarly)));
 
   Future<void> openPlans({bool keepNavigation = false}) async {
     final initialPlanIds = monthlyPlans.map((plan) => plan.id).toSet();
@@ -3860,23 +3892,28 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
     final target = _nextPlanOccurrence(plan, DateTime.now());
     final period = _planPeriodKey(plan, target);
     if (plan.paidEarlyPeriods.contains(period)) return;
+    final source = portfolio(plan.portfolioId);
     final confirmed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-                title: Text('Mark ${plan.description} paid early?'),
+                title: Text('Pay ${plan.description} early?'),
                 content: Text(
-                    'This marks the $period billing period as paid without creating a transaction or changing its payment date.'),
+                    'This creates a ${source.currency.symbol} ${plan.amount.toStringAsFixed(2)} outflow today and marks $period as paid. It takes effect immediately in balances and category caps.'),
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(ctx, false),
                       child: const Text('Cancel')),
                   FilledButton(
                       onPressed: () => Navigator.pop(ctx, true),
-                      child: const Text('Mark paid early'))
+                      child: const Text('Pay early'))
                 ]));
     if (confirmed != true) return;
     widget.onPayEarly(plan);
     setState(() {});
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${plan.description} paid early and recorded today.')));
+    }
   }
 
   @override
@@ -3993,83 +4030,113 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                                       fontSize: 12, color: Colors.blueGrey))
                             ]))),
                 const SizedBox(height: 8),
-                ...ordered.map((plan) {
-                  final source = portfolio(plan.portfolioId);
-                  final destination = plan.destinationPortfolioId == null
-                      ? null
-                      : portfolio(plan.destinationPortfolioId!);
-                  final isCreated = createdThisMonth(plan, now);
-                  final isSkipped =
-                      plan.lastSkippedMonth == _planPeriodKey(plan, now);
-                  final nextPeriod =
-                      _planPeriodKey(plan, _nextPlanOccurrence(plan, now));
-                  final isNextPeriodPaid =
-                      plan.paidEarlyPeriods.contains(nextPeriod);
-                  return Card(
-                      child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(children: [
-                            CircleAvatar(
-                                child: Icon(plan.savingsTransfer
-                                    ? Icons.savings_outlined
-                                    : _categoryIcon(
-                                        plan.category, widget.icons))),
-                            const SizedBox(width: 12),
-                            Expanded(
-                                child: Text(plan.description,
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.bold))),
-                            Text(
-                                '${source.currency.symbol} ${plan.amount.toStringAsFixed(0)}'),
-                          ]),
-                          const SizedBox(height: 8),
-                          Text(
-                              '${plan.savingsTransfer ? 'Transfer' : 'Expense'} from ${source.name}${destination == null ? '' : ' to ${destination.name}'} - ${_planFrequencyLabel(plan.frequency)} - due day ${plan.dueDay}'),
-                          const SizedBox(height: 10),
-                          Align(
-                              alignment: Alignment.centerRight,
-                              child: Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  alignment: WrapAlignment.end,
+                ...<({String title, List<MonthlyPlan> plans})>[
+                  (
+                    title: 'Due this period',
+                    plans: ordered
+                        .where((plan) => _planOccursInMonth(plan, now))
+                        .toList()
+                  ),
+                  (
+                    title: 'Other scheduled plans',
+                    plans: ordered
+                        .where((plan) => !_planOccursInMonth(plan, now))
+                        .toList()
+                  )
+                ]
+                    .where((section) => section.plans.isNotEmpty)
+                    .expand((section) => [
+                          Padding(
+                              padding:
+                                  const EdgeInsets.only(top: 12, bottom: 4),
+                              child: Text(section.title,
+                                  style:
+                                      Theme.of(context).textTheme.titleMedium)),
+                          ...section.plans.map((plan) {
+                            final source = portfolio(plan.portfolioId);
+                            final destination =
+                                plan.destinationPortfolioId == null
+                                    ? null
+                                    : portfolio(plan.destinationPortfolioId!);
+                            final isCreated = createdThisMonth(plan, now);
+                            final isSkipped = plan.lastSkippedMonth ==
+                                _planPeriodKey(plan, now);
+                            final nextPeriod = _planPeriodKey(
+                                plan, _nextPlanOccurrence(plan, now));
+                            final isNextPeriodPaid =
+                                plan.paidEarlyPeriods.contains(nextPeriod);
+                            return Card(
+                                child: Padding(
+                              padding: const EdgeInsets.all(14),
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    OutlinedButton.icon(
-                                        onPressed: isNextPeriodPaid
-                                            ? null
-                                            : () => payEarly(plan),
-                                        icon: const Icon(
-                                            Icons.event_available_outlined),
-                                        label: Text(isNextPeriodPaid
-                                            ? 'Next period paid'
-                                            : 'Pay early')),
-                                    if (isCreated)
-                                      FilledButton.icon(
-                                          onPressed: null,
-                                          icon: Icon(isSkipped
-                                              ? Icons.skip_next_outlined
-                                              : Icons.check),
-                                          label: Text(
-                                              !_planOccursInMonth(plan, now)
-                                                  ? 'Not due this month'
-                                                  : isSkipped
-                                                      ? 'Skipped this period'
-                                                      : 'Created this period'))
-                                    else ...[
-                                      OutlinedButton(
-                                          onPressed: () => skip(plan),
-                                          child: const Text('Skip this month')),
-                                      FilledButton.icon(
-                                          onPressed: () => create(plan),
-                                          icon: const Icon(Icons.play_arrow),
-                                          label: const Text('Create now'))
-                                    ]
-                                  ])),
+                                    Row(children: [
+                                      CircleAvatar(
+                                          child: Icon(plan.savingsTransfer
+                                              ? Icons.savings_outlined
+                                              : _categoryIcon(plan.category,
+                                                  widget.icons))),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                          child: Text(plan.description,
+                                              style: const TextStyle(
+                                                  fontWeight:
+                                                      FontWeight.bold))),
+                                      Text(
+                                          '${source.currency.symbol} ${plan.amount.toStringAsFixed(0)}'),
+                                    ]),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                        '${plan.savingsTransfer ? 'Transfer' : 'Expense'} from ${source.name}${destination == null ? '' : ' to ${destination.name}'} - ${_planFrequencyLabel(plan.frequency)} - due day ${plan.dueDay}'),
+                                    const SizedBox(height: 10),
+                                    Align(
+                                        alignment: Alignment.centerRight,
+                                        child: Wrap(
+                                            spacing: 8,
+                                            runSpacing: 8,
+                                            alignment: WrapAlignment.end,
+                                            children: [
+                                              OutlinedButton.icon(
+                                                  onPressed: isNextPeriodPaid
+                                                      ? null
+                                                      : () => payEarly(plan),
+                                                  icon: const Icon(Icons
+                                                      .event_available_outlined),
+                                                  label: Text(isNextPeriodPaid
+                                                      ? 'Next period paid'
+                                                      : 'Pay early')),
+                                              if (isCreated)
+                                                FilledButton.icon(
+                                                    onPressed: null,
+                                                    icon: Icon(isSkipped
+                                                        ? Icons
+                                                            .skip_next_outlined
+                                                        : Icons.check),
+                                                    label: Text(!_planOccursInMonth(
+                                                            plan, now)
+                                                        ? 'Not due this month'
+                                                        : isSkipped
+                                                            ? 'Skipped this period'
+                                                            : 'Created this period'))
+                                              else ...[
+                                                OutlinedButton(
+                                                    onPressed: () => skip(plan),
+                                                    child: const Text(
+                                                        'Skip this month')),
+                                                FilledButton.icon(
+                                                    onPressed: () =>
+                                                        create(plan),
+                                                    icon: const Icon(
+                                                        Icons.play_arrow),
+                                                    label: const Text(
+                                                        'Create now'))
+                                              ]
+                                            ])),
+                                  ]),
+                            ));
+                          })
                         ]),
-                  ));
-                }),
               ],
             ),
     );
