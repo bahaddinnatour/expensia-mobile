@@ -4266,11 +4266,23 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                             final isCreated = createdThisMonth(plan, now);
                             final isSkipped = plan.lastSkippedMonth ==
                                 _planPeriodKey(plan, now);
+                            final isPaidThisPeriod = _planOccursInMonth(plan, now) &&
+                                isCreated &&
+                                !isSkipped;
                             final nextPeriod = _planPeriodKey(
                                 plan, _nextPlanOccurrence(plan, now));
                             final isNextPeriodPaid =
                                 plan.paidEarlyPeriods.contains(nextPeriod);
                             return Card(
+                                color: isPaidThisPeriod
+                                    ? Colors.teal.shade50
+                                    : null,
+                                shape: isPaidThisPeriod
+                                    ? RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                        side: BorderSide(
+                                            color: Colors.teal.shade300))
+                                    : null,
                                 child: Padding(
                               padding: const EdgeInsets.all(14),
                               child: Column(
@@ -4313,6 +4325,13 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                                                       : 'Pay early')),
                                               if (isCreated)
                                                 FilledButton.icon(
+                                                    style: isPaidThisPeriod
+                                                        ? FilledButton.styleFrom(
+                                                            disabledBackgroundColor:
+                                                                Colors.teal.shade700,
+                                                            disabledForegroundColor:
+                                                                Colors.white)
+                                                        : null,
                                                     onPressed: null,
                                                     icon: Icon(isSkipped
                                                         ? Icons
@@ -4323,7 +4342,7 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                                                         ? 'Not due this month'
                                                         : isSkipped
                                                             ? 'Skipped this period'
-                                                            : 'Created this period'))
+                                                            : 'Paid this period'))
                                               else ...[
                                                 OutlinedButton(
                                                     onPressed: () => skip(plan),
