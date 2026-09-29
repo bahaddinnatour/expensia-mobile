@@ -1896,6 +1896,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               builder: (_) => CategoryReportPage(
                   portfolio: current,
                   icons: categoryIcons,
+                  caps: globalCategoryCaps[current.currency.name] ??
+                      current.categoryCaps,
                   sourcePortfolioNames: {
                     for (final tx in current.transactions) tx.id: current.name
                   },
@@ -2067,6 +2069,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                       builder: (_) => CategoryReportPage(
                           portfolio: reportPortfolio,
                           icons: categoryIcons,
+                          caps: showGlobalReport
+                              ? globalCategoryCaps[current.currency.name] ?? {}
+                              : current.categoryCaps,
                           sourcePortfolioNames: reportSourcePortfolioNames,
                           capCycleStart: reportCycleStart)))),
           const SizedBox(height: 14),
@@ -2574,11 +2579,13 @@ class CategoryReportPage extends StatelessWidget {
       {super.key,
       required this.portfolio,
       required this.icons,
+      required this.caps,
       required this.sourcePortfolioNames,
       required this.capCycleStart,
       this.bottomNavigationBar});
   final Portfolio portfolio;
   final Map<String, int> icons;
+  final Map<String, double> caps;
   final Map<String, String> sourcePortfolioNames;
   final DateTime capCycleStart;
   final Widget? bottomNavigationBar;
@@ -2592,7 +2599,12 @@ class CategoryReportPage extends StatelessWidget {
       totals.update(tx.category, (amount) => amount + tx.amount,
           ifAbsent: () => tx.amount);
     }
-    final entries = totals.entries.toList()
+    final entries = <String>{
+      ...portfolio.transactions
+          .where((tx) => !tx.inflow && tx.transferId == null)
+          .map((tx) => tx.category),
+      ...caps.keys
+    }.map((category) => MapEntry(category, totals[category] ?? 0)).toList()
       ..sort((a, b) => b.value.compareTo(a.value));
     final total = entries.fold<double>(0, (sum, entry) => sum + entry.value);
     return Scaffold(
@@ -2623,7 +2635,7 @@ class CategoryReportPage extends StatelessWidget {
                 ...entries.map((entry) {
                   final portion = total == 0 ? 0.0 : entry.value / total;
                   final monthlyUsed = entry.value;
-                  final cap = portfolio.categoryCaps[entry.key];
+                  final cap = caps[entry.key];
                   final capRatio = cap == null ? 0.0 : monthlyUsed / cap;
                   final barValue = cap == null
                       ? portion
