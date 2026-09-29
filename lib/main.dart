@@ -1539,6 +1539,13 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               capCycleStarts: capCycleStarts)));
   Future<void> openTrends() => Navigator.push<void>(context,
       MaterialPageRoute(builder: (_) => TrendsPage(portfolios: portfolios)));
+  Future<void> openReports() => Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+          builder: (_) => ReportsPage(
+              portfolios: portfolios,
+              initialPortfolioId: selected,
+              icons: categoryIcons)));
   Future<void> openProjection() => Navigator.push<void>(
       context,
       MaterialPageRoute(
@@ -1826,6 +1833,14 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                     openTrends();
                   }),
               ListTile(
+                  leading: const Icon(Icons.manage_search_outlined),
+                  title: const Text('Reports'),
+                  subtitle: const Text('Filter historical spending'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    openReports();
+                  }),
+              ListTile(
                   leading: const Icon(Icons.calendar_month_outlined),
                   title: const Text('Bill calendar'),
                   onTap: () {
@@ -1869,7 +1884,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             NavigationDestination(
                 icon: Icon(Icons.bar_chart_outlined),
                 selectedIcon: Icon(Icons.bar_chart),
-                label: 'Report'),
+                label: 'Spending progress'),
             NavigationDestination(
                 icon: Icon(Icons.event_note_outlined),
                 selectedIcon: Icon(Icons.event_note),
@@ -2039,7 +2054,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           const SizedBox(height: 14),
           Row(children: [
             Expanded(
-                child: Text('Report scope',
+                child: Text('Spending progress scope',
                     style: Theme.of(c).textTheme.titleSmall)),
             SegmentedButton<bool>(
                 segments: [
@@ -2260,6 +2275,178 @@ class _TrendsPageState extends State<TrendsPage> {
                   title: Text(entry.key),
                   trailing: Text(entry.value.toStringAsFixed(2),
                       style: const TextStyle(fontWeight: FontWeight.bold)))))
+        ]));
+  }
+}
+
+class ReportsPage extends StatefulWidget {
+  const ReportsPage(
+      {super.key,
+      required this.portfolios,
+      required this.initialPortfolioId,
+      required this.icons});
+  final List<Portfolio> portfolios;
+  final String initialPortfolioId;
+  final Map<String, int> icons;
+  @override
+  State<ReportsPage> createState() => _ReportsPageState();
+}
+
+class _ReportsPageState extends State<ReportsPage> {
+  late String portfolioId;
+  var period = 'all';
+  var category = 'all';
+
+  @override
+  void initState() {
+    super.initState();
+    portfolioId = widget.initialPortfolioId;
+  }
+
+  DateTime? startForPeriod() {
+    final now = DateTime.now();
+    switch (period) {
+      case 'month':
+        return DateTime(now.year, now.month, 1);
+      case '90days':
+        return DateTime(now.year, now.month, now.day - 90);
+      case 'year':
+        return DateTime(now.year, 1, 1);
+      default:
+        return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedPortfolio = widget.portfolios.firstWhere(
+        (portfolio) => portfolio.id == portfolioId,
+        orElse: () => widget.portfolios.first);
+    final scope = portfolioId == 'all'
+        ? widget.portfolios
+            .where(
+                (portfolio) => portfolio.currency == selectedPortfolio.currency)
+            .toList()
+        : [selectedPortfolio];
+    final allOutflows = scope
+        .expand((portfolio) => portfolio.transactions
+            .where((tx) => !tx.inflow && tx.transferId == null)
+            .map((tx) => (portfolio: portfolio, transaction: tx)))
+        .toList();
+    final categories = allOutflows
+        .map((entry) => entry.transaction.category)
+        .where((value) => value.trim().isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    final start = startForPeriod();
+    final filtered = allOutflows
+        .where((entry) =>
+            (start == null || !entry.transaction.createdAt.isBefore(start)) &&
+            (category == 'all' || entry.transaction.category == category))
+        .toList()
+      ..sort(
+          (a, b) => b.transaction.createdAt.compareTo(a.transaction.createdAt));
+    final total = filtered.fold<double>(
+        0, (sum, entry) => sum + entry.transaction.amount);
+    final byCategory = <String, double>{};
+    for (final entry in filtered) {
+      byCategory[entry.transaction.category] =
+          (byCategory[entry.transaction.category] ?? 0) +
+              entry.transaction.amount;
+    }
+    final breakdown = byCategory.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return Scaffold(
+        appBar: AppBar(title: const Text('Reports')),
+        body: ListView(padding: const EdgeInsets.all(20), children: [
+          Text('Historical spending report',
+              style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 4),
+          const Text('Filter recorded outflows without changing cap progress.'),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<String>(
+              value: portfolioId,
+              decoration: const InputDecoration(labelText: 'Portfolio scope'),
+              items: [
+                DropdownMenuItem(
+                    value: 'all',
+                    child: Text(
+                        'All ${selectedPortfolio.currency.nameLabel} portfolios')),
+                ...widget.portfolios.map((portfolio) => DropdownMenuItem(
+                    value: portfolio.id, child: Text(portfolio.name)))
+              ],
+              onChanged: (value) => setState(() {
+                    portfolioId = value!;
+                    category = 'all';
+                  })),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+              value: period,
+              decoration: const InputDecoration(labelText: 'Period'),
+              items: const [
+                DropdownMenuItem(value: 'all', child: Text('All time')),
+                DropdownMenuItem(value: 'year', child: Text('This year')),
+                DropdownMenuItem(value: '90days', child: Text('Last 90 days')),
+                DropdownMenuItem(value: 'month', child: Text('This month'))
+              ],
+              onChanged: (value) => setState(() => period = value!)),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+              value: category,
+              decoration: const InputDecoration(labelText: 'Category'),
+              items: [
+                const DropdownMenuItem(
+                    value: 'all', child: Text('All categories')),
+                ...categories.map((value) =>
+                    DropdownMenuItem(value: value, child: Text(value)))
+              ],
+              onChanged: (value) => setState(() => category = value!)),
+          const SizedBox(height: 16),
+          Card(
+              child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(children: [
+                    const Icon(Icons.summarize_outlined),
+                    const SizedBox(width: 10),
+                    const Text('Filtered outflow'),
+                    const Spacer(),
+                    Text(
+                        '${selectedPortfolio.currency.symbol} ${total.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.bold))
+                  ]))),
+          const SizedBox(height: 12),
+          ...breakdown.map((entry) => Card(
+              child: ListTile(
+                  leading: CircleAvatar(
+                      child: Icon(_categoryIcon(entry.key, widget.icons))),
+                  title: Text(entry.key),
+                  subtitle: Text(
+                      '${(total == 0 ? 0 : entry.value / total * 100).toStringAsFixed(1)}% of filtered outflow'),
+                  trailing: Text(
+                      '${selectedPortfolio.currency.symbol} ${entry.value.toStringAsFixed(2)}',
+                      style: const TextStyle(fontWeight: FontWeight.bold))))),
+          if (breakdown.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text('Transactions', style: Theme.of(context).textTheme.titleMedium)
+          ],
+          ...filtered.map((entry) => Card(
+              child: ListTile(
+                  leading: CircleAvatar(
+                      child: Icon(_categoryIcon(
+                          entry.transaction.category, widget.icons))),
+                  title: Text(entry.transaction.description),
+                  subtitle: Text(
+                      '${entry.portfolio.name} - ${entry.transaction.category} - ${_shortDateTime(entry.transaction.createdAt)}'),
+                  trailing: Text(
+                      '-${entry.portfolio.currency.symbol} ${entry.transaction.amount.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                          color: Colors.red, fontWeight: FontWeight.bold))))),
+          if (filtered.isEmpty)
+            const Padding(
+                padding: EdgeInsets.all(20),
+                child: Center(child: Text('No outflows match these filters.')))
         ]));
   }
 }
@@ -2608,7 +2795,7 @@ class CategoryReportPage extends StatelessWidget {
       ..sort((a, b) => b.value.compareTo(a.value));
     final total = entries.fold<double>(0, (sum, entry) => sum + entry.value);
     return Scaffold(
-        appBar: AppBar(title: Text('${portfolio.name} report')),
+        appBar: AppBar(title: Text('${portfolio.name} spending progress')),
         bottomNavigationBar: bottomNavigationBar,
         body: entries.isEmpty
             ? const Center(child: Text('No outflow transactions yet.'))
