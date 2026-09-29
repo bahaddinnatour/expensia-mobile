@@ -4708,19 +4708,41 @@ class _MonthlyCapsPageState extends State<MonthlyCapsPage> {
                 ? 'Reset cap usage (started ${_shortDateTime(cycleStart)})'
                 : 'Reset cap usage (all recorded expenses included)')),
         const SizedBox(height: 16),
-        ...widget.categories.map((category) {
-          final cap = caps[category];
-          return Card(
-              child: ListTile(
-                  onTap: () => editCap(category),
-                  leading: CircleAvatar(
-                      child: Icon(_categoryIcon(category, widget.icons))),
-                  title: Text(category),
-                  subtitle: Text(cap == null
-                      ? 'No cap set'
-                      : '${portfolio.currency.symbol} ${cap.toStringAsFixed(2)} per month'),
-                  trailing: const Icon(Icons.edit_outlined)));
-        })
+        ...(() {
+          final capCategories = <String>{
+            ...widget.categories,
+            ...caps.keys,
+            ...(shared
+                    ? widget.portfolios
+                        .where((item) => item.currency == portfolio.currency)
+                        .expand((item) => item.transactions)
+                    : portfolio.transactions)
+                .where((tx) =>
+                    !tx.inflow &&
+                    tx.transferId == null &&
+                    !tx.createdAt.isBefore(cycleStart))
+                .map((tx) => tx.category)
+          }.where((category) => category.trim().isNotEmpty).toList()
+            ..sort();
+          return [
+            const Text(
+                'Every category with a configured cap or current-cycle spending is shown below.'),
+            const SizedBox(height: 8),
+            ...capCategories.map((category) {
+              final cap = caps[category];
+              return Card(
+                  child: ListTile(
+                      onTap: () => editCap(category),
+                      leading: CircleAvatar(
+                          child: Icon(_categoryIcon(category, widget.icons))),
+                      title: Text(category),
+                      subtitle: Text(cap == null
+                          ? 'No cap set'
+                          : '${portfolio.currency.symbol} ${cap.toStringAsFixed(2)} per month'),
+                      trailing: const Icon(Icons.edit_outlined)));
+            })
+          ];
+        })()
       ]));
 }
 
