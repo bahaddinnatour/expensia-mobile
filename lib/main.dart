@@ -1157,6 +1157,108 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> payCreditCard() async {
+    final sources = portfolios
+        .where((portfolio) =>
+            !portfolio.isCreditCard &&
+            portfolio.currency == current.currency &&
+            portfolio.id != current.id)
+        .toList();
+    if (sources.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Add a bank or wallet in the same currency first.')));
+      return;
+    }
+    final amount = TextEditingController();
+    final description = TextEditingController();
+    var source = sources.first;
+    final payment = await showDialog<
+            ({Portfolio source, double amount, String description})>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, setDialog) => AlertDialog(
+                    title: const Text('Pay credit card'),
+                    content: Column(mainAxisSize: MainAxisSize.min, children: [
+                      DropdownButtonFormField<Portfolio>(
+                          value: source,
+                          decoration:
+                              const InputDecoration(labelText: 'Pay from'),
+                          items: sources
+                              .map((portfolio) => DropdownMenuItem(
+                                  value: portfolio,
+                                  child: Text(portfolio.name)))
+                              .toList(),
+                          onChanged: (value) =>
+                              setDialog(() => source = value!)),
+                      const SizedBox(height: 10),
+                      TextField(
+                          enabled: false,
+                          decoration: InputDecoration(
+                              labelText: 'Pay to', hintText: current.name)),
+                      const SizedBox(height: 10),
+                      TextField(
+                          controller: amount,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          decoration: InputDecoration(
+                              labelText: 'Payment amount',
+                              prefixText: '${current.currency.symbol} ')),
+                      const SizedBox(height: 10),
+                      TextField(
+                          controller: description,
+                          decoration: const InputDecoration(
+                              labelText: 'Description (optional)'))
+                    ]),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(ctx, (
+                                source: source,
+                                amount: double.tryParse(
+                                        amount.text.replaceAll(',', '')) ??
+                                    0,
+                                description: description.text.trim()
+                              )),
+                          child: const Text('Save payment'))
+                    ])));
+    amount.dispose();
+    description.dispose();
+    if (payment == null || payment.amount <= 0) return;
+    final now = DateTime.now();
+    final transferId = 'transfer_${now.microsecondsSinceEpoch}';
+    setState(() {
+      payment.source.transactions.insert(
+          0,
+          Tx(
+              id: '${now.microsecondsSinceEpoch}_out',
+              description: payment.description.isEmpty
+                  ? 'Payment to ${current.name}'
+                  : payment.description,
+              category: 'Personal transfer',
+              amount: payment.amount,
+              inflow: false,
+              createdAt: now,
+              transferId: transferId,
+              destinationPortfolioId: current.id));
+      current.transactions.insert(
+          0,
+          Tx(
+              id: '${now.microsecondsSinceEpoch}_in',
+              description: payment.description.isEmpty
+                  ? 'Payment from ${payment.source.name}'
+                  : payment.description,
+              category: 'Personal transfer',
+              amount: payment.amount,
+              inflow: true,
+              createdAt: now,
+              transferId: transferId,
+              destinationPortfolioId: current.id));
+    });
+    await save();
+  }
+
   Future<void> transferMoney() async {
     final amount = TextEditingController();
     final description = TextEditingController();
@@ -2093,7 +2195,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           Row(children: [
             Expanded(
                 child: FilledButton.icon(
-                    onPressed: () => addTx(true),
+                    onPressed: () =>
+                        current.isCreditCard ? payCreditCard() : addTx(true),
                     icon: const Icon(Icons.add),
                     label: Text(
                         current.isCreditCard ? 'Add payment' : 'Add inflow'))),
@@ -4266,9 +4369,10 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                             final isCreated = createdThisMonth(plan, now);
                             final isSkipped = plan.lastSkippedMonth ==
                                 _planPeriodKey(plan, now);
-                            final isPaidThisPeriod = _planOccursInMonth(plan, now) &&
-                                isCreated &&
-                                !isSkipped;
+                            final isPaidThisPeriod =
+                                _planOccursInMonth(plan, now) &&
+                                    isCreated &&
+                                    !isSkipped;
                             final nextPeriod = _planPeriodKey(
                                 plan, _nextPlanOccurrence(plan, now));
                             final isNextPeriodPaid =
@@ -4284,81 +4388,87 @@ class _PlanTransactionsPageState extends State<PlanTransactionsPage> {
                                             color: Colors.teal.shade300))
                                     : null,
                                 child: Padding(
-                              padding: const EdgeInsets.all(14),
-                              child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(children: [
-                                      CircleAvatar(
-                                          child: Icon(plan.savingsTransfer
-                                              ? Icons.savings_outlined
-                                              : _categoryIcon(plan.category,
-                                                  widget.icons))),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                          child: Text(plan.description,
-                                              style: const TextStyle(
-                                                  fontWeight:
-                                                      FontWeight.bold))),
-                                      Text(
-                                          '${source.currency.symbol} ${plan.amount.toStringAsFixed(0)}'),
-                                    ]),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                        '${plan.savingsTransfer ? 'Transfer' : 'Expense'} from ${source.name}${destination == null ? '' : ' to ${destination.name}'} - ${_planFrequencyLabel(plan.frequency)} - due day ${plan.dueDay}'),
-                                    const SizedBox(height: 10),
-                                    Align(
-                                        alignment: Alignment.centerRight,
-                                        child: Wrap(
-                                            spacing: 8,
-                                            runSpacing: 8,
-                                            alignment: WrapAlignment.end,
-                                            children: [
-                                              OutlinedButton.icon(
-                                                  onPressed: isNextPeriodPaid
-                                                      ? null
-                                                      : () => payEarly(plan),
-                                                  icon: const Icon(Icons
-                                                      .event_available_outlined),
-                                                  label: Text(isNextPeriodPaid
-                                                      ? 'Next period paid'
-                                                      : 'Pay early')),
-                                              if (isCreated)
-                                                FilledButton.icon(
-                                                    style: isPaidThisPeriod
-                                                        ? FilledButton.styleFrom(
-                                                            disabledBackgroundColor:
-                                                                Colors.teal.shade700,
-                                                            disabledForegroundColor:
-                                                                Colors.white)
-                                                        : null,
-                                                    onPressed: null,
-                                                    icon: Icon(isSkipped
-                                                        ? Icons
-                                                            .skip_next_outlined
-                                                        : Icons.check),
-                                                    label: Text(!_planOccursInMonth(
-                                                            plan, now)
-                                                        ? 'Not due this month'
-                                                        : isSkipped
-                                                            ? 'Skipped this period'
-                                                            : 'Paid this period'))
-                                              else ...[
-                                                OutlinedButton(
-                                                    onPressed: () => skip(plan),
-                                                    child: const Text(
-                                                        'Skip this month')),
-                                                FilledButton.icon(
-                                                    onPressed: () =>
-                                                        create(plan),
-                                                    icon: const Icon(
-                                                        Icons.play_arrow),
-                                                    label: const Text(
-                                                        'Create now'))
-                                              ]
-                                            ])),
-                                  ]),
-                            ));
+                                  padding: const EdgeInsets.all(14),
+                                  child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(children: [
+                                          CircleAvatar(
+                                              child: Icon(plan.savingsTransfer
+                                                  ? Icons.savings_outlined
+                                                  : _categoryIcon(plan.category,
+                                                      widget.icons))),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                              child: Text(plan.description,
+                                                  style: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.bold))),
+                                          Text(
+                                              '${source.currency.symbol} ${plan.amount.toStringAsFixed(0)}'),
+                                        ]),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                            '${plan.savingsTransfer ? 'Transfer' : 'Expense'} from ${source.name}${destination == null ? '' : ' to ${destination.name}'} - ${_planFrequencyLabel(plan.frequency)} - due day ${plan.dueDay}'),
+                                        const SizedBox(height: 10),
+                                        Align(
+                                            alignment: Alignment.centerRight,
+                                            child: Wrap(
+                                                spacing: 8,
+                                                runSpacing: 8,
+                                                alignment: WrapAlignment.end,
+                                                children: [
+                                                  OutlinedButton.icon(
+                                                      onPressed:
+                                                          isNextPeriodPaid
+                                                              ? null
+                                                              : () => payEarly(
+                                                                  plan),
+                                                      icon: const Icon(Icons
+                                                          .event_available_outlined),
+                                                      label: Text(isNextPeriodPaid
+                                                          ? 'Next period paid'
+                                                          : 'Pay early')),
+                                                  if (isCreated)
+                                                    FilledButton.icon(
+                                                        style: isPaidThisPeriod
+                                                            ? FilledButton.styleFrom(
+                                                                disabledBackgroundColor:
+                                                                    Colors.teal
+                                                                        .shade700,
+                                                                disabledForegroundColor:
+                                                                    Colors
+                                                                        .white)
+                                                            : null,
+                                                        onPressed: null,
+                                                        icon: Icon(isSkipped
+                                                            ? Icons
+                                                                .skip_next_outlined
+                                                            : Icons.check),
+                                                        label: Text(!_planOccursInMonth(
+                                                                plan, now)
+                                                            ? 'Not due this month'
+                                                            : isSkipped
+                                                                ? 'Skipped this period'
+                                                                : 'Paid this period'))
+                                                  else ...[
+                                                    OutlinedButton(
+                                                        onPressed: () =>
+                                                            skip(plan),
+                                                        child: const Text(
+                                                            'Skip this month')),
+                                                    FilledButton.icon(
+                                                        onPressed: () =>
+                                                            create(plan),
+                                                        icon: const Icon(
+                                                            Icons.play_arrow),
+                                                        label: const Text(
+                                                            'Create now'))
+                                                  ]
+                                                ])),
+                                      ]),
+                                ));
                           })
                         ]),
               ],
